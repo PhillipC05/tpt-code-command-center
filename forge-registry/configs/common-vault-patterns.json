@@ -1,0 +1,6 @@
+[
+  "(?i)(?:azure|az)[_\\-]?(?:tenant|client|subscription)[_\\-]?(?:id|secret|key)\\s*[=:]\\s*['\"]?[a-zA-Z0-9\\-]{8,}",
+  "(?i)(?:internal|int|svc|service)[_\\-]?(?:api[_\\-]?key|token|secret)\\s*[=:]\\s*['\"]?[a-zA-Z0-9_\\-]{16,}",
+  "(?i)(?:db|database|postgres|mysql|mongo|redis)[_\\-]?(?:url|uri|conn(?:ection)?[_\\-]?str(?:ing)?)\\s*[=:]\\s*['\"]?\\S{12,}",
+  "(?i)(?:smtp|mail)[_\\-]?(?:password|pass|pwd|secret)\\s*[=:]\\s*['\"]?\\S{8,}"
+]

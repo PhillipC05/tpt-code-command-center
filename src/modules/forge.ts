@@ -3,8 +3,9 @@ import * as fs from 'fs';
 import * as https from 'https';
 import * as vscode from 'vscode';
 import { log } from '../utils/logger';
+import { getConfig } from '../utils/config';
 
-const FORGE_INDEX_URL = 'https://raw.githubusercontent.com/tpt-forge/registry/main/index.json';
+const DEFAULT_REGISTRY_URL = 'https://raw.githubusercontent.com/PhillipC05/tpt-code-command-center/master/forge-registry/index.json';
 
 export interface ForgeEntry {
   name: string;
@@ -12,7 +13,54 @@ export interface ForgeEntry {
   type: 'router-rule' | 'vault-pattern' | 'system-prompt';
   url: string;
   version: string;
+  localContent?: unknown;
 }
+
+const BUILTIN_FORGE_ENTRIES: ForgeEntry[] = [
+  {
+    name: 'default-router-rules',
+    description: 'Comprehensive TPT Router ruleset — routes short/simple prompts to cheaper models and code, debugging, and security contexts to capable models',
+    type: 'router-rule',
+    url: 'https://raw.githubusercontent.com/PhillipC05/tpt-code-command-center/master/forge-registry/configs/default-router-rules.json',
+    version: '1.0.0',
+    localContent: [
+      { match: { maxTokens: 1500 }, model: 'openai/gpt-4o-mini', provider: 'openrouter' },
+      { match: { keywords: ['summarize', 'summarise', 'tldr', 'brief', 'overview', 'explain'] }, model: 'openai/gpt-4o-mini', provider: 'openrouter' },
+      { match: { keywords: ['translate', 'grammar', 'spelling', 'proofread', 'rephrase'] }, model: 'openai/gpt-4o-mini', provider: 'openrouter' },
+      { match: { extensions: ['ts', 'tsx', 'js', 'jsx', 'py', 'go', 'rs', 'java', 'cpp', 'cs', 'c', 'h', 'hpp'] }, model: 'openai/gpt-4o', provider: 'openrouter' },
+      { match: { extensions: ['sql', 'prisma', 'graphql'] }, model: 'openai/gpt-4o', provider: 'openrouter' },
+      { match: { keywords: ['debug', 'error', 'exception', 'stack trace', 'crash', 'traceback', 'bug', 'fix'] }, model: 'openai/gpt-4o', provider: 'openrouter' },
+      { match: { keywords: ['refactor', 'optimise', 'optimize', 'performance', 'architecture', 'design pattern'] }, model: 'openai/gpt-4o', provider: 'openrouter' },
+      { match: { keywords: ['security', 'vulnerability', 'cve', 'authentication', 'authorisation', 'authorization', 'encrypt', 'xss', 'injection'] }, model: 'openai/gpt-4o', provider: 'openrouter' },
+      { match: { keywords: ['migrate', 'migration', 'schema change', 'breaking change'] }, model: 'openai/gpt-4o', provider: 'openrouter' },
+    ],
+  },
+  {
+    name: 'common-vault-patterns',
+    description: 'Extended credential patterns for Slack, SendGrid, Twilio, Google Cloud, Azure AD, and generic internal API key formats',
+    type: 'vault-pattern',
+    url: 'https://raw.githubusercontent.com/PhillipC05/tpt-code-command-center/master/forge-registry/configs/common-vault-patterns.json',
+    version: '1.0.0',
+    localContent: [
+      '(?i)(?:azure|az)[_\\-]?(?:tenant|client|subscription)[_\\-]?(?:id|secret|key)\\s*[=:]\\s*[\'"]?[a-zA-Z0-9\\-]{8,}',
+      '(?i)(?:internal|int|svc|service)[_\\-]?(?:api[_\\-]?key|token|secret)\\s*[=:]\\s*[\'"]?[a-zA-Z0-9_\\-]{16,}',
+      '(?i)(?:db|database|postgres|mysql|mongo|redis)[_\\-]?(?:url|uri|conn(?:ection)?[_\\-]?str(?:ing)?)\\s*[=:]\\s*[\'"]?\\S{12,}',
+      '(?i)(?:smtp|mail)[_\\-]?(?:password|pass|pwd|secret)\\s*[=:]\\s*[\'"]?\\S{8,}',
+    ],
+  },
+  {
+    name: 'silent-edit-system-prompt',
+    description: 'System prompt template that instructs LLMs to output file edits using the TPT Silent Edit tpt-edit JSON schema',
+    type: 'system-prompt',
+    url: 'https://raw.githubusercontent.com/PhillipC05/tpt-code-command-center/master/forge-registry/configs/silent-edit-system-prompt.json',
+    version: '1.0.0',
+    localContent: {
+      name: 'TPT Silent Edit Schema',
+      description: 'Instructs LLMs to apply file edits using the tpt-edit JSON block format so changes are applied directly by the extension without showing markdown diffs in the chat.',
+      text: 'You can apply file edits without showing markdown diffs by outputting a JSON block in this exact format:\n```tpt-edit\n{"file":"<relative-path>","startLine":<1-indexed>,"endLine":<1-indexed>,"newContent":"<replacement lines>"}\n```\nUse this format when making code changes. Multiple edits can be output as separate blocks.\nNormal text responses are fine when no edits are needed.',
+    },
+  },
+];
 
 function getTptDir(): string | undefined {
   const folders = vscode.workspace.workspaceFolders;
@@ -36,13 +84,22 @@ function fetchJson(url: string): Promise<unknown> {
 }
 
 export async function fetchForgeIndex(): Promise<ForgeEntry[]> {
+  const config = getConfig();
+  const registryUrl = config.forge.registryUrl || DEFAULT_REGISTRY_URL;
+
+  let remoteEntries: ForgeEntry[] = [];
   try {
-    const data = await fetchJson(FORGE_INDEX_URL) as { entries: ForgeEntry[] };
-    return data.entries ?? [];
+    const data = await fetchJson(registryUrl) as { entries: ForgeEntry[] };
+    remoteEntries = data.entries ?? [];
   } catch (e) {
-    log(`Forge: could not fetch index — ${e}`);
-    return [];
+    log(`Forge: registry unreachable (${registryUrl}) — using built-in entries. ${e}`);
   }
+
+  // Merge: remote entries win on name collision
+  const merged = new Map<string, ForgeEntry>();
+  for (const entry of BUILTIN_FORGE_ENTRIES) merged.set(entry.name, entry);
+  for (const entry of remoteEntries) merged.set(entry.name, entry);
+  return [...merged.values()];
 }
 
 export async function installForgeEntry(entry: ForgeEntry): Promise<boolean> {
@@ -53,7 +110,7 @@ export async function installForgeEntry(entry: ForgeEntry): Promise<boolean> {
   }
 
   try {
-    const content = await fetchJson(entry.url);
+    const content = entry.localContent !== undefined ? entry.localContent : await fetchJson(entry.url);
     const filename = `${entry.name.replace(/[^a-z0-9_-]/gi, '-')}.json`;
     fs.writeFileSync(path.join(dir, filename), JSON.stringify(content, null, 2));
     log(`Forge: installed ${entry.name}`);
@@ -67,16 +124,11 @@ export async function installForgeEntry(entry: ForgeEntry): Promise<boolean> {
 export async function browseForge(): Promise<void> {
   const entries = await fetchForgeIndex();
 
-  if (entries.length === 0) {
-    vscode.window.showInformationMessage('TPT Forge: no community configs available or registry unreachable.');
-    return;
-  }
-
   const picked = await vscode.window.showQuickPick(
     entries.map((e) => ({
       label: e.name,
       description: e.type,
-      detail: e.description,
+      detail: `${e.description}${e.localContent !== undefined ? ' (built-in)' : ''}`,
       entry: e,
     })),
     { placeHolder: 'Select a community config to install', matchOnDescription: true, matchOnDetail: true }

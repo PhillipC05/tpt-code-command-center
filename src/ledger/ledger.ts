@@ -136,6 +136,41 @@ export async function getStats(): Promise<LedgerStats> {
   return { totalRequests, totalTokensIn, totalTokensOut, totalCostUsd, cacheHits, estimatedSavingsUsd, last7Days };
 }
 
+export interface ModelStat {
+  model: string;
+  requests: number;
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number;
+}
+
+export async function getModelBreakdown(): Promise<ModelStat[]> {
+  const database = await getDb();
+  const rows = database.exec(
+    `SELECT model, COUNT(*), SUM(tokens_in), SUM(tokens_out), SUM(cost_usd)
+     FROM requests GROUP BY model ORDER BY SUM(cost_usd) DESC LIMIT 20`
+  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (rows[0]?.values ?? []).map((r: any) => ({
+    model: String(r[0]),
+    requests: Number(r[1]),
+    tokensIn: Number(r[2]),
+    tokensOut: Number(r[3]),
+    costUsd: Number(r[4]),
+  }));
+}
+
+export async function getTodayCostUsd(): Promise<number> {
+  const database = await getDb();
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const rows = database.exec(
+    'SELECT COALESCE(SUM(cost_usd), 0) FROM requests WHERE ts >= ?',
+    [startOfDay.getTime()]
+  );
+  return Number(rows[0]?.values[0]?.[0] ?? 0);
+}
+
 export async function clearLedger(): Promise<void> {
   const database = await getDb();
   database.run('DELETE FROM requests');

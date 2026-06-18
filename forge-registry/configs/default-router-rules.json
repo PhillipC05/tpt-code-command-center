@@ -1,0 +1,47 @@
+[
+  {
+    "match": { "maxTokens": 1500 },
+    "model": "openai/gpt-4o-mini",
+    "provider": "openrouter"
+  },
+  {
+    "match": { "keywords": ["summarize", "summarise", "tldr", "brief", "overview", "explain"] },
+    "model": "openai/gpt-4o-mini",
+    "provider": "openrouter"
+  },
+  {
+    "match": { "keywords": ["translate", "grammar", "spelling", "proofread", "rephrase"] },
+    "model": "openai/gpt-4o-mini",
+    "provider": "openrouter"
+  },
+  {
+    "match": { "extensions": ["ts", "tsx", "js", "jsx", "py", "go", "rs", "java", "cpp", "cs", "c", "h", "hpp"] },
+    "model": "openai/gpt-4o",
+    "provider": "openrouter"
+  },
+  {
+    "match": { "extensions": ["sql", "prisma", "graphql"] },
+    "model": "openai/gpt-4o",
+    "provider": "openrouter"
+  },
+  {
+    "match": { "keywords": ["debug", "error", "exception", "stack trace", "crash", "traceback", "bug", "fix"] },
+    "model": "openai/gpt-4o",
+    "provider": "openrouter"
+  },
+  {
+    "match": { "keywords": ["refactor", "optimise", "optimize", "performance", "architecture", "design pattern"] },
+    "model": "openai/gpt-4o",
+    "provider": "openrouter"
+  },
+  {
+    "match": { "keywords": ["security", "vulnerability", "cve", "authentication", "authorisation", "authorization", "encrypt", "xss", "injection"] },
+    "model": "openai/gpt-4o",
+    "provider": "openrouter"
+  },
+  {
+    "match": { "keywords": ["migrate", "migration", "schema change", "breaking change"] },
+    "model": "openai/gpt-4o",
+    "provider": "openrouter"
+  }
+]

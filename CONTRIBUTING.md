@@ -15,7 +15,7 @@ Thank you for considering a contribution. This project is Apache 2.0 licensed an
 ### Clone and build
 
 ```bash
-git clone https://github.com/<org>/tpt-code-command-center
+git clone https://github.com/PhillipC05/tpt-code-command-center
 cd tpt-code-command-center
 npm install
 npm run compile

@@ -27,55 +27,55 @@
 
 - [x] Add `.vscode/launch.json` — F5 Extension Development Host configuration
 - [x] Add `.vscode/tasks.json` — build/watch tasks
-- [ ] Create `media/icon.png` — 128×128 marketplace icon (currently placeholder SVG only)
-- [ ] Add `.vscode/settings.json` example for Cline setup (base URL + `X-TPT-Token` header)
-- [ ] Write unit tests (`src/test/`) — Vault regex, hash normalisation, router rule matching
-- [ ] Add integration test — proxy pass-through with a mock upstream server
+- [x] Create `media/icon.png` — 128×128 marketplace icon (currently placeholder SVG only)
+- [x] Add `.vscode/settings.json` example for Cline setup (base URL + `X-TPT-Token` header)
+- [x] Write unit tests (`src/test/`) — Vault regex, hash normalisation, router rule matching
+- [x] Add integration test — proxy pass-through with a mock upstream server
 
 ## Phase 4 — Streaming & Edge Cases (Pending)
 
-- [ ] Handle **streaming responses** (`stream: true`) — currently assumes non-streaming JSON bodies
-- [ ] Handle **Anthropic streaming** (`text/event-stream` SSE format)
-- [ ] Handle **OpenAI streaming** (`data: [DONE]` SSE format)
-- [ ] Token counting from streaming chunks (accumulate for ledger)
-- [ ] Silent Edit interception for streamed responses
-- [ ] Graceful proxy error page (currently returns raw JSON error)
+- [x] Handle **streaming responses** (`stream: true`) — detects and routes to streaming path
+- [x] Handle **Anthropic streaming** (`text/event-stream` SSE format)
+- [x] Handle **OpenAI streaming** (`data: [DONE]` SSE format)
+- [x] Token counting from streaming chunks (accumulate for ledger)
+- [x] Silent Edit interception for streamed responses
+- [x] Graceful proxy error page — consistent `sendErrorJson` helper with descriptive messages
 
 ## Phase 5 — Smart Context Enhancements (Pending)
 
-- [ ] Bundle tree-sitter language WASM files for TypeScript, JavaScript, Python, Go, Rust
+- [x] Bundle tree-sitter language WASM files for TypeScript, JavaScript, Python, Go, Rust
   - These must ship with the extension (not fetched at runtime) for offline/air-gapped use
   - Add to `package.json` files array and `.vscodeignore` whitelist
-- [ ] Support outline extraction for additional languages (C#, Java, PHP, Ruby)
-- [ ] Detect file extension from tool call `path` argument rather than content heuristic
+- [x] Support outline extraction for additional languages (C#, Java, PHP, Ruby)
+- [x] Detect file extension from tool call `path` argument rather than content heuristic
 
 ## Phase 6 — Router & Cost Tracking (Pending)
 
-- [ ] Seed Router with built-in default rules (e.g. `maxTokens: 2000` → `gpt-4o-mini`)
-- [ ] Pull live model pricing from OpenRouter API and cache locally (refresh daily)
-- [ ] Display per-model cost breakdown in the dashboard
-- [ ] Add "cost budget" alert — warn when daily spend exceeds a threshold
+- [x] Seed Router with built-in default rules (`maxTokens: 2000` → `gpt-4o-mini`, code extensions → `gpt-4o`)
+- [x] Pull live model pricing from OpenRouter API and cache locally (refresh daily)
+- [x] Display per-model cost breakdown in the dashboard
+- [x] Add "cost budget" alert — warn when daily spend exceeds a threshold
 
 ## Phase 7 — Forge Registry (Pending)
 
 - [ ] Create the `tpt-forge/registry` GitHub repository with `index.json` and example entries
-- [ ] Publish initial community configs:
-  - [ ] Default router rules set
-  - [ ] Common Vault patterns (internal company key formats)
-  - [ ] System prompt templates for Silent Edit schema
+- [x] Publish initial community configs:
+  - [x] Default router rules set
+  - [x] Common Vault patterns (internal company key formats)
+  - [x] System prompt templates for Silent Edit schema
 
 ## Phase 8 — Packaging & Release (Pending)
 
-- [ ] Install `vsce` and run `vsce package` — verify `.vsix` builds cleanly
+- [x] Install `vsce` and run `vsce package` — verify `.vsix` builds cleanly
 - [ ] Test `.vsix` install on clean Windows machine
 - [ ] Test `.vsix` install on macOS
 - [ ] Test `.vsix` install on Linux
-- [ ] Create `media/icon.png` 128×128 and 256×256 versions
+- [x] Create `media/icon.png` 128×128 and 256×256 versions
 - [ ] Fill in `package.json` `publisher` field with real VS Code Marketplace publisher ID
 - [ ] Write marketplace listing description and screenshots
 - [ ] Publish to VS Code Marketplace via `vsce publish`
 - [ ] Tag v0.1.0 release on GitHub
-- [ ] Write `CHANGELOG.md` v0.1.0 entry
+- [x] Write `CHANGELOG.md` v0.1.0 entry
 
 ## Phase 9 — Future Ideas (Backlog)
 

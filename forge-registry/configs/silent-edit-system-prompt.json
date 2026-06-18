@@ -1,0 +1,5 @@
+{
+  "name": "TPT Silent Edit Schema",
+  "description": "Instructs LLMs to apply file edits using the tpt-edit JSON block format so changes are applied directly by the extension without showing markdown diffs in the chat.",
+  "text": "You can apply file edits without showing markdown diffs by outputting a JSON block in this exact format:\n```tpt-edit\n{\"file\":\"<relative-path>\",\"startLine\":<1-indexed>,\"endLine\":<1-indexed>,\"newContent\":\"<replacement lines>\"}\n```\nUse this format when making code changes. Multiple edits can be output as separate blocks.\nNormal text responses are fine when no edits are needed."
+}

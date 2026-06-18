@@ -10,13 +10,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Live OpenRouter pricing** — fetches `/api/v1/models` once per day, cached in `.tpt/pricing.json`. Falls back to a built-in table covering all major providers when offline.
+- **Daily cost budget alert** — `tpt.costBudget.dailyLimitUsd` setting; warning notification fires once per day when spending exceeds the limit.
+- **Per-model cost breakdown** — dashboard now shows a "Cost by Model" table and a budget progress bar.
+- **tree-sitter WASM bundling** — `scripts/download-wasm.js` downloads pre-built language grammar WASM files (TypeScript, JavaScript, Python, Go, Rust, Java, C#, PHP, Ruby) to `media/wasm/`. Run `npm run download-wasm` before packaging.
+- **Smart Context path detection** — reads file extension from the tool call `path`/`input.path` argument directly rather than scanning content for a filename pattern.
+- **Integration test** — proxy pass-through test with a real mock upstream HTTP server (`src/test/integration/`).
+- **Model picker** — `TPT: Configure Models` command for picking Memory Weaver summarisation models with live Ollama discovery.
 - Streaming response support (SSE for both Anthropic and OpenAI formats)
-- Tree-sitter language WASM bundles for TypeScript, JavaScript, Python, Go, Rust
 - `.vscode/launch.json` for F5 development workflow
-- GitHub Actions CI pipeline
 - Unit tests for Vault regex, hash normalisation, and Router rule matching
 - Built-in default Router rules
-- Live model pricing from OpenRouter API (cached daily)
 
 ---
 

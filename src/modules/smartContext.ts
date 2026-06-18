@@ -1,10 +1,19 @@
+import * as path from 'path';
 import { ContentBlock, Message } from '../proxy/types';
 
 // web-tree-sitter is loaded lazily — types kept as any to avoid version-skew issues
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let Parser: any;
+let parserInitialized = false;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const parsersCache = new Map<string, any>();
+
+// Directory containing bundled language .wasm files — set once on extension activation
+let wasmDir = '';
+
+export function setWasmDir(dir: string): void {
+  wasmDir = dir;
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getParser(language: string): Promise<any | undefined> {
@@ -13,12 +22,20 @@ async function getParser(language: string): Promise<any | undefined> {
   try {
     if (!Parser) {
       Parser = require('web-tree-sitter');
-      await Parser.init();
     }
-    const langName = languageToWasm(language);
-    if (!langName) return undefined;
+    if (!parserInitialized) {
+      // Locate the runtime WASM from the bundled media/wasm directory when available
+      const runtimeWasm = wasmDir ? path.join(wasmDir, 'tree-sitter.wasm') : undefined;
+      await Parser.init(runtimeWasm ? { locateFile: () => runtimeWasm } : undefined);
+      parserInitialized = true;
+    }
 
-    const langModule = await Parser.Language.load(langName);
+    const wasmFile = languageToWasm(language);
+    if (!wasmFile) return undefined;
+    if (!wasmDir) return undefined; // WASM files not bundled — fall back to regex outline
+
+    const wasmPath = path.join(wasmDir, wasmFile);
+    const langModule = await Parser.Language.load(wasmPath);
     const parser = new Parser();
     parser.setLanguage(langModule);
     parsersCache.set(language, parser);
@@ -30,22 +47,28 @@ async function getParser(language: string): Promise<any | undefined> {
 
 function languageToWasm(ext: string): string | undefined {
   const map: Record<string, string> = {
-    ts: 'tree-sitter-typescript',
-    tsx: 'tree-sitter-typescript',
-    js: 'tree-sitter-javascript',
-    jsx: 'tree-sitter-javascript',
-    py: 'tree-sitter-python',
-    go: 'tree-sitter-go',
-    rs: 'tree-sitter-rust',
-    cs: 'tree-sitter-c-sharp',
-    java: 'tree-sitter-java',
-    php: 'tree-sitter-php',
-    rb: 'tree-sitter-ruby',
+    ts: 'tree-sitter-typescript.wasm',
+    tsx: 'tree-sitter-typescript.wasm',
+    js: 'tree-sitter-javascript.wasm',
+    jsx: 'tree-sitter-javascript.wasm',
+    py: 'tree-sitter-python.wasm',
+    go: 'tree-sitter-go.wasm',
+    rs: 'tree-sitter-rust.wasm',
+    cs: 'tree-sitter-c_sharp.wasm',
+    java: 'tree-sitter-java.wasm',
+    php: 'tree-sitter-php.wasm',
+    rb: 'tree-sitter-ruby.wasm',
   };
   return map[ext];
 }
 
-function getFileExtension(text: string): string | undefined {
+function getFileExtension(text: string, toolCallPath?: string): string | undefined {
+  // Prefer the explicit path argument from the tool call
+  if (toolCallPath) {
+    const parts = toolCallPath.split('.');
+    if (parts.length > 1) return parts[parts.length - 1].toLowerCase();
+  }
+  // Fallback: scan content for a filename pattern
   const match = text.match(/(?:file|path|filename):\s*["']?([^\s"']+\.\w+)/i);
   if (match) {
     const parts = match[1].split('.');
@@ -125,11 +148,18 @@ export async function runSmartContext(messages: Message[], maxFileSize: number):
         (msg.content as ContentBlock[]).map(async (block): Promise<ContentBlock> => {
           if (block.type !== 'tool_result') return block;
 
-          const content = (block as Record<string, unknown>).content;
+          const blockRecord = block as Record<string, unknown>;
+          const content = blockRecord.content;
           if (typeof content !== 'string') return block;
           if (Buffer.byteLength(content) <= maxFileSize) return block;
 
-          const ext = getFileExtension(content);
+          // Prefer explicit path from the tool input (Cline/Claude pass it as tool_use input.path)
+          const toolPath = typeof blockRecord.path === 'string' ? blockRecord.path
+            : typeof (blockRecord.input as Record<string, unknown> | undefined)?.path === 'string'
+              ? (blockRecord.input as Record<string, string>).path
+              : undefined;
+
+          const ext = getFileExtension(content, toolPath);
           let outline: string;
 
           if (ext) {

@@ -34,8 +34,10 @@ export async function runPipeline(req: ProxyRequest): Promise<PipelineResult> {
     }
   }
 
-  // 2. Token Shield: check cache before hitting upstream
-  if (config.tokenShield.enabled && 'messages' in body && Array.isArray(body.messages)) {
+  // 2. Token Shield: check cache before hitting upstream (skip for streaming — cached responses
+  //    are buffered JSON, not SSE, so returning one to a streaming client would break the protocol)
+  const isStreaming = !!(body as Record<string, unknown>).stream;
+  if (config.tokenShield.enabled && !isStreaming && 'messages' in body && Array.isArray(body.messages)) {
     const cached = await runTokenShield(body.messages);
     if (cached) {
       actions.push('tokenShield:hit');

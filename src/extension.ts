@@ -5,10 +5,16 @@ import { showDashboard, refreshDashboard, disposeDashboard } from './ui/dashboar
 import { getStats, clearLedger } from './ledger/ledger';
 import { clearCache } from './modules/tokenShield';
 import { browseForge } from './modules/forge';
+import { setWasmDir } from './modules/smartContext';
+import { showModelPicker } from './ui/modelPicker';
 import { log, getChannel, disposeChannel } from './utils/logger';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   log('TPT Code Command Center activating...');
+
+  // Point Smart Context at the bundled WASM files shipped inside the extension
+  const wasmDir = require('path').join(context.extensionPath, 'media', 'wasm');
+  setWasmDir(wasmDir);
 
   // Start proxy server
   await startProxyServer(context);
@@ -56,6 +62,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
 
     vscode.commands.registerCommand('tpt.browseForge', () => browseForge()),
+
+    vscode.commands.registerCommand('tpt.configureModels', () => showModelPicker()),
 
     vscode.commands.registerCommand('tpt.copyProxyUrl', async () => {
       const url = getProxyUrl();

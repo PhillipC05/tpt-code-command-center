@@ -86,6 +86,44 @@ export async function handleSilentEditResponse(responseBody: string): Promise<st
   return responseBody;
 }
 
+export async function handleSilentEditStreamResponse(accumulated: string, format: 'anthropic' | 'openai'): Promise<void> {
+  let fullText = '';
+  for (const line of accumulated.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data: ')) continue;
+    const data = trimmed.slice(6).trim();
+    if (data === '[DONE]') continue;
+    try {
+      const parsed = JSON.parse(data);
+      if (format === 'anthropic') {
+        if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+          fullText += parsed.delta.text ?? '';
+        }
+      } else {
+        fullText += parsed.choices?.[0]?.delta?.content ?? '';
+      }
+    } catch { /* skip malformed event */ }
+  }
+
+  if (!fullText.includes('```tpt-edit')) return;
+
+  const instructions: SilentEditInstruction[] = [];
+  let match: RegExpExecArray | null;
+  TPT_EDIT_RE.lastIndex = 0;
+  while ((match = TPT_EDIT_RE.exec(fullText)) !== null) {
+    try {
+      const instr = JSON.parse(match[1].trim()) as SilentEditInstruction;
+      if (instr.file && instr.startLine && instr.endLine && instr.newContent !== undefined) {
+        instructions.push(instr);
+      }
+    } catch { /* skip invalid blocks */ }
+  }
+
+  if (instructions.length > 0) {
+    await applyEdits(instructions);
+  }
+}
+
 async function applyEdits(instructions: SilentEditInstruction[]): Promise<void> {
   const workspaceEdit = new vscode.WorkspaceEdit();
   const folders = vscode.workspace.workspaceFolders;

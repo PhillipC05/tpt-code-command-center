@@ -7,7 +7,7 @@ export interface RouteOverride {
   model?: string;
 }
 
-function estimateTokensInMessages(messages: Message[]): number {
+export function estimateTokensInMessages(messages: Message[]): number {
   let chars = 0;
   for (const msg of messages) {
     if (typeof msg.content === 'string') chars += msg.content.length;
@@ -20,7 +20,7 @@ function estimateTokensInMessages(messages: Message[]): number {
   return Math.ceil(chars / 4);
 }
 
-function getLastUserContent(messages: Message[]): string {
+export function getLastUserContent(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === 'user') {
       const c = messages[i].content;
@@ -30,7 +30,7 @@ function getLastUserContent(messages: Message[]): string {
   return '';
 }
 
-function getExtensionsInMessages(messages: Message[]): string[] {
+export function getExtensionsInMessages(messages: Message[]): string[] {
   const exts = new Set<string>();
   const re = /\.([a-zA-Z0-9]+)(?:\s|"|'|`|$)/g;
   for (const msg of messages) {
@@ -43,6 +43,18 @@ function getExtensionsInMessages(messages: Message[]): string[] {
   return [...exts];
 }
 
+// Sensible defaults used when the router is enabled but the user has no custom rules.
+export const BUILTIN_ROUTER_RULES: RouterRule[] = [
+  // Short prompts don't need a frontier model — route to a cheaper fast model
+  { match: { maxTokens: 2000 }, model: 'openai/gpt-4o-mini', provider: 'openrouter' },
+  // Code-heavy contexts — route to a capable coding model
+  {
+    match: { extensions: ['ts', 'tsx', 'js', 'jsx', 'py', 'go', 'rs', 'java', 'cpp', 'cs'] },
+    model: 'openai/gpt-4o',
+    provider: 'openrouter',
+  },
+];
+
 export function runRouter(
   body: AnthropicRequest | OpenAIRequest | Record<string, unknown>,
   rules: RouterRule[]
@@ -52,7 +64,10 @@ export function runRouter(
   const userContent = getLastUserContent(messages);
   const extensions = getExtensionsInMessages(messages);
 
-  for (const rule of rules) {
+  // Use built-in defaults when the user hasn't configured any rules
+  const effectiveRules = rules.length > 0 ? rules : BUILTIN_ROUTER_RULES;
+
+  for (const rule of effectiveRules) {
     const { match, model, provider } = rule;
     let matched = true;
 

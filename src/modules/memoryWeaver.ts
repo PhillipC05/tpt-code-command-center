@@ -50,11 +50,11 @@ function extractiveSummarise(messages: Message[], threshold: number): Message[] 
   return [...system, ...kept];
 }
 
-async function summariseViaOllama(messages: Message[]): Promise<string | null> {
+async function summariseViaOllama(messages: Message[], ollamaModel: string): Promise<string | null> {
   return new Promise((resolve) => {
     const conversation = messages.map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`).join('\n\n');
     const prompt = `Summarise the following conversation history concisely, preserving key decisions, code, and context:\n\n${conversation}`;
-    const body = JSON.stringify({ model: 'llama3', prompt, stream: false });
+    const body = JSON.stringify({ model: ollamaModel, prompt, stream: false });
 
     const req = http.request(
       { hostname: 'localhost', port: 11434, path: '/api/generate', method: 'POST',
@@ -79,7 +79,7 @@ async function summariseViaOllama(messages: Message[]): Promise<string | null> {
   });
 }
 
-async function summariseViaProxy(messages: Message[]): Promise<string | null> {
+async function summariseViaProxy(messages: Message[], options: MemoryWeaverOptions): Promise<string | null> {
   const config = getConfig();
   const upstream = resolveUpstreamUrl(config);
   if (!upstream.apiKey && config.upstreamProvider !== 'local') return null;
@@ -93,7 +93,7 @@ async function summariseViaProxy(messages: Message[]): Promise<string | null> {
     .join('\n\n');
 
   const summaryRequest = {
-    model: config.upstreamProvider === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'gpt-4o-mini',
+    model: config.upstreamProvider === 'anthropic' ? options.anthropicSummaryModel : options.openaiSummaryModel,
     max_tokens: 500,
     messages: [
       {
@@ -159,6 +159,9 @@ function saveMemory(summary: string): void {
 export interface MemoryWeaverOptions {
   tokenThreshold: number;
   fallbackOrder: string[];
+  anthropicSummaryModel: string;
+  openaiSummaryModel: string;
+  ollamaModel: string;
 }
 
 export interface MemoryWeaverResult {
@@ -179,7 +182,7 @@ export async function runMemoryWeaver(
 
   for (const backend of options.fallbackOrder) {
     if (backend === 'ollama') {
-      const summary = await summariseViaOllama(messages);
+      const summary = await summariseViaOllama(messages, options.ollamaModel);
       if (summary) {
         saveMemory(summary);
         const system = messages.filter((m) => m.role === 'system');
@@ -189,7 +192,7 @@ export async function runMemoryWeaver(
         return { messages: [...system, summaryMsg, ...last], summarised: true };
       }
     } else if (backend === 'proxy') {
-      const summary = await summariseViaProxy(messages);
+      const summary = await summariseViaProxy(messages, options);
       if (summary) {
         saveMemory(summary);
         const system = messages.filter((m) => m.role === 'system');

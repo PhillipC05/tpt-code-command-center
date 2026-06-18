@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getStats, LedgerStats } from '../ledger/ledger';
+import { getStats, getModelBreakdown, LedgerStats, ModelStat } from '../ledger/ledger';
 import { getProxyUrl } from '../proxy/server';
 import { getConfig } from '../utils/config';
 
@@ -28,13 +28,13 @@ export function showDashboard(context: vscode.ExtensionContext): void {
 
 export async function refreshDashboard(): Promise<void> {
   if (!panel) return;
-  const stats = await getStats();
+  const [stats, modelBreakdown] = await Promise.all([getStats(), getModelBreakdown()]);
   const config = getConfig();
   const proxyUrl = getProxyUrl();
-  panel.webview.html = buildHtml(stats, config, proxyUrl);
+  panel.webview.html = buildHtml(stats, modelBreakdown, config, proxyUrl);
 }
 
-function buildHtml(stats: LedgerStats, config: ReturnType<typeof getConfig>, proxyUrl: string | undefined): string {
+function buildHtml(stats: LedgerStats, modelBreakdown: ModelStat[], config: ReturnType<typeof getConfig>, proxyUrl: string | undefined): string {
   const nonce = Math.random().toString(36).substring(2);
 
   const modules = [
@@ -54,6 +54,17 @@ function buildHtml(stats: LedgerStats, config: ReturnType<typeof getConfig>, pro
   const dayRows = stats.last7Days
     .map((d) => `<tr><td>${d.date}</td><td>${d.tokensIn.toLocaleString()}</td><td>${d.tokensOut.toLocaleString()}</td><td>$${d.costUsd.toFixed(4)}</td><td>${d.cacheHits}</td></tr>`)
     .join('');
+
+  const modelRows = modelBreakdown
+    .map((m) => `<tr><td style="font-family:monospace;font-size:11px">${m.model}</td><td>${m.requests.toLocaleString()}</td><td>${(m.tokensIn + m.tokensOut).toLocaleString()}</td><td>$${m.costUsd.toFixed(4)}</td></tr>`)
+    .join('');
+
+  const budgetLimit = config.costBudget.dailyLimitUsd;
+  const todayRow = stats.last7Days[stats.last7Days.length - 1];
+  const todaySpend = todayRow?.costUsd ?? 0;
+  const budgetBar = budgetLimit > 0
+    ? `<div class="budget-bar-wrap"><div class="budget-bar-fill" style="width:${Math.min(100, (todaySpend / budgetLimit) * 100).toFixed(1)}%"></div></div><div class="budget-label">Today $${todaySpend.toFixed(4)} / $${budgetLimit.toFixed(2)} limit</div>`
+    : '';
 
   const savingsPct = stats.totalCostUsd > 0
     ? ((stats.estimatedSavingsUsd / (stats.totalCostUsd + stats.estimatedSavingsUsd)) * 100).toFixed(1)
@@ -82,6 +93,9 @@ function buildHtml(stats: LedgerStats, config: ReturnType<typeof getConfig>, pro
     .off { color: var(--vscode-descriptionForeground); }
     .badge-on { display: inline-block; background: #1b5e20; color: #a5d6a7; border-radius: 3px; padding: 1px 6px; font-size: 11px; }
     .badge-off { display: inline-block; background: var(--vscode-input-background); color: var(--vscode-descriptionForeground); border-radius: 3px; padding: 1px 6px; font-size: 11px; }
+    .budget-bar-wrap { height: 6px; background: var(--vscode-input-background); border-radius: 3px; overflow: hidden; margin-bottom: 4px; }
+    .budget-bar-fill { height: 100%; background: var(--vscode-textLink-foreground); border-radius: 3px; transition: width 0.3s; }
+    .budget-label { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 12px; }
   </style>
 </head>
 <body>
@@ -120,10 +134,18 @@ function buildHtml(stats: LedgerStats, config: ReturnType<typeof getConfig>, pro
     </div>
   </div>
 
+  ${budgetBar}
+
   <h2>Last 7 Days</h2>
   <table>
     <thead><tr><th>Date</th><th>Tokens In</th><th>Tokens Out</th><th>Cost</th><th>Cache Hits</th></tr></thead>
     <tbody>${dayRows || '<tr><td colspan="5">No data yet</td></tr>'}</tbody>
+  </table>
+
+  <h2>Cost by Model</h2>
+  <table>
+    <thead><tr><th>Model</th><th>Requests</th><th>Tokens</th><th>Cost</th></tr></thead>
+    <tbody>${modelRows || '<tr><td colspan="4">No data yet</td></tr>'}</tbody>
   </table>
 
   <h2>Modules</h2>

@@ -28,7 +28,7 @@
   "icon": "media/icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tpt/code-command-center"
+    "url": "https://github.com/PhillipC05/tpt-code-command-center"
   },
   "contributes": {
     "configuration": {
@@ -45,8 +45,23 @@
             "openrouter",
             "anthropic",
             "openai",
+            "deepseek",
+            "qwen",
+            "kimi",
+            "grok",
             "local",
             "custom"
+          ],
+          "enumDescriptions": [
+            "OpenRouter — unified API with access to 100+ models including DeepSeek and Qwen",
+            "Anthropic — direct access to Claude models",
+            "OpenAI — direct access to GPT models",
+            "DeepSeek — DeepSeek's own API endpoint (api.deepseek.com)",
+            "Qwen — Alibaba Cloud DashScope compatible endpoint",
+            "Kimi — Moonshot AI endpoint (api.moonshot.cn)",
+            "Grok — xAI Grok API endpoint (api.x.ai)",
+            "Local — Ollama, LM Studio, or any local OpenAI-compatible server",
+            "Custom — arbitrary base URL and API key"
           ],
           "default": "openrouter",
           "description": "Default upstream provider for all LLM requests."
@@ -65,6 +80,26 @@
           "type": "string",
           "default": "",
           "description": "OpenAI API key for direct routing."
+        },
+        "tpt.deepseekApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "DeepSeek API key (platform.deepseek.com)."
+        },
+        "tpt.qwenApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Qwen API key — Alibaba Cloud DashScope key."
+        },
+        "tpt.kimiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Kimi API key — Moonshot AI (platform.moonshot.cn)."
+        },
+        "tpt.grokApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Grok API key — xAI (console.x.ai)."
         },
         "tpt.localBaseUrl": {
           "type": "string",
@@ -141,6 +176,21 @@
           ],
           "description": "Order of summarisation backends to try. 'ollama' = local Ollama, 'proxy' = route through configured LLM, 'extractive' = drop oldest messages."
         },
+        "tpt.memoryWeaver.anthropicSummaryModel": {
+          "type": "string",
+          "default": "claude-haiku-4-5-20251001",
+          "description": "Model used by Memory Weaver when the upstream provider is Anthropic. Update this string when the model is deprecated — no code change needed."
+        },
+        "tpt.memoryWeaver.openaiSummaryModel": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "description": "Model used by Memory Weaver when the upstream provider is OpenAI-compatible (OpenRouter, OpenAI, DeepSeek, Grok, etc.). Update when deprecated."
+        },
+        "tpt.memoryWeaver.ollamaModel": {
+          "type": "string",
+          "default": "llama3",
+          "description": "Ollama model used for local summarisation. The model must be pulled first (e.g. 'ollama pull llama3')."
+        },
         "tpt.router.enabled": {
           "type": "boolean",
           "default": false,
@@ -148,8 +198,34 @@
         },
         "tpt.router.rules": {
           "type": "array",
-          "default": [],
-          "description": "Routing rules array. Each rule: { match: { maxTokens?, keywords?, extensions? }, model: string, provider: string }."
+          "default": [
+            {
+              "match": {
+                "maxTokens": 2000
+              },
+              "model": "openai/gpt-4o-mini",
+              "provider": "openrouter"
+            },
+            {
+              "match": {
+                "extensions": [
+                  "ts",
+                  "tsx",
+                  "js",
+                  "jsx",
+                  "py",
+                  "go",
+                  "rs",
+                  "java",
+                  "cpp",
+                  "cs"
+                ]
+              },
+              "model": "openai/gpt-4o",
+              "provider": "openrouter"
+            }
+          ],
+          "description": "Routing rules evaluated in order when the router is enabled. Each rule: { match: { maxTokens?, keywords?, extensions? }, model: string, provider: string }. Edit model/provider values here to update routing targets without any code change."
         },
         "tpt.silentEdit.enabled": {
           "type": "boolean",
@@ -161,10 +237,20 @@
           "default": true,
           "description": "TPT Forge — automatically check for updated community configs from GitHub."
         },
+        "tpt.forge.registryUrl": {
+          "type": "string",
+          "default": "",
+          "description": "TPT Forge — custom registry URL. Leave empty to use the default community registry. Must point to a raw JSON file with { entries: ForgeEntry[] } shape."
+        },
         "tpt.terminal.verboseLogging": {
           "type": "boolean",
           "default": false,
           "description": "TPT Terminal — show detailed per-request pipeline logs in the Output Channel."
+        },
+        "tpt.costBudget.dailyLimitUsd": {
+          "type": "number",
+          "default": 0,
+          "description": "Daily spend limit in USD. A warning notification is shown when today's cost exceeds this value. Set to 0 to disable."
         }
       }
     },
@@ -196,6 +282,10 @@
       {
         "command": "tpt.copyProxyUrl",
         "title": "TPT: Copy Proxy URL to Clipboard"
+      },
+      {
+        "command": "tpt.configureModels",
+        "title": "TPT: Configure Models"
       }
     ],
     "viewsContainers": {
@@ -218,12 +308,13 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run download-wasm && npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
     "pretest": "npm run compile",
-    "test": "node ./out/test/runTest.js"
+    "test": "node --test out/test/vault.test.js out/test/hash.test.js out/test/router.test.js out/test/integration/proxy.integration.test.js",
+    "download-wasm": "node scripts/download-wasm.js"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
@@ -231,6 +322,7 @@
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
+    "@vscode/vsce": "^3.9.2",
     "eslint": "^8.0.0",
     "typescript": "^5.3.0"
   },

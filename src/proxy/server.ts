@@ -7,9 +7,10 @@ import { log } from '../utils/logger';
 import { runPipeline } from './pipeline';
 import { recordRequest } from '../ledger/ledger';
 import { storeCachedResponse } from '../modules/tokenShield';
-import { handleSilentEditResponse } from '../modules/silentEdit';
+import { handleSilentEditResponse, handleSilentEditStreamResponse } from '../modules/silentEdit';
 import { AnthropicRequest, OpenAIRequest, ProxyRequest } from './types';
-import { countTokens } from '../ledger/ledger';
+import { countTokens, getTodayCostUsd } from '../ledger/ledger';
+import { getCostUsd, initPricing } from '../ledger/pricing';
 
 const PREFERRED_PORT = 7331;
 let server: http.Server | undefined;
@@ -32,7 +33,6 @@ async function findFreePort(start: number): Promise<number> {
       srv.close(() => resolve(addr.port));
     });
     srv.on('error', () => {
-      // Port in use — try next
       findFreePort(start + 1).then(resolve, reject);
     });
   });
@@ -50,6 +50,13 @@ function readBody(req: http.IncomingMessage): Promise<string> {
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
+}
+
+function sendErrorJson(res: http.ServerResponse, status: number, message: string): void {
+  if (!res.headersSent) {
+    res.writeHead(status, { 'content-type': 'application/json' });
+  }
+  res.end(JSON.stringify({ error: message }));
 }
 
 function forwardRequest(
@@ -80,7 +87,6 @@ function forwardRequest(
       }
     }
 
-    // Forward useful headers from the original request (minus auth)
     const passthroughHeaders = ['accept', 'user-agent', 'anthropic-version', 'anthropic-beta'];
     for (const h of passthroughHeaders) {
       if (originalHeaders[h]) {
@@ -114,6 +120,111 @@ function forwardRequest(
   });
 }
 
+// Forward a streaming request, piping SSE chunks directly to clientRes.
+// Returns the full accumulated body text (for token counting) and status code.
+// If the upstream returns a non-SSE error response it is buffered and forwarded as JSON.
+function forwardStreamingRequest(
+  targetUrl: string,
+  apiKey: string,
+  path: string,
+  method: string,
+  originalHeaders: http.IncomingHttpHeaders,
+  body: string,
+  _format: 'anthropic' | 'openai',
+  upstreamProvider: string,
+  clientRes: http.ServerResponse,
+): Promise<{ accumulated: string; status: number }> {
+  return new Promise((resolve) => {
+    const url = new URL(targetUrl);
+    const fullPath = url.pathname.replace(/\/$/, '') + path;
+
+    const outHeaders: Record<string, string> = {
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(body).toString(),
+    };
+
+    if (apiKey) {
+      if (upstreamProvider === 'anthropic') {
+        outHeaders['x-api-key'] = apiKey;
+        outHeaders['anthropic-version'] = '2023-06-01';
+      } else {
+        outHeaders['authorization'] = `Bearer ${apiKey}`;
+      }
+    }
+
+    const passthroughHeaders = ['accept', 'user-agent', 'anthropic-version', 'anthropic-beta'];
+    for (const h of passthroughHeaders) {
+      if (originalHeaders[h]) {
+        outHeaders[h] = originalHeaders[h] as string;
+      }
+    }
+
+    const options: https.RequestOptions = {
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: fullPath,
+      method,
+      headers: outHeaders,
+    };
+
+    const proto = url.protocol === 'https:' ? https : http;
+    const outReq = proto.request(options, (upstreamRes) => {
+      const status = upstreamRes.statusCode ?? 500;
+      const contentType = upstreamRes.headers['content-type'] ?? '';
+      const isSSE = contentType.includes('text/event-stream');
+      const chunks: Buffer[] = [];
+
+      if (!isSSE || status !== 200) {
+        // Non-streaming error — buffer and forward as JSON
+        upstreamRes.on('data', (c: Buffer) => chunks.push(c));
+        upstreamRes.on('end', () => {
+          const responseBody = Buffer.concat(chunks).toString('utf8');
+          if (!clientRes.headersSent) {
+            clientRes.writeHead(status, { 'content-type': 'application/json' });
+            clientRes.end(responseBody);
+          }
+          resolve({ accumulated: responseBody, status });
+        });
+        return;
+      }
+
+      // SSE — set streaming headers and pipe chunks through
+      clientRes.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        'connection': 'keep-alive',
+        'x-accel-buffering': 'no',
+      });
+
+      upstreamRes.on('data', (chunk: Buffer) => {
+        clientRes.write(chunk);
+        chunks.push(chunk);
+      });
+
+      upstreamRes.on('end', () => {
+        clientRes.end();
+        resolve({ accumulated: Buffer.concat(chunks).toString('utf8'), status });
+      });
+
+      upstreamRes.on('error', () => {
+        clientRes.end();
+        resolve({ accumulated: Buffer.concat(chunks).toString('utf8'), status });
+      });
+    });
+
+    outReq.on('error', (e) => {
+      if (!clientRes.headersSent) {
+        clientRes.writeHead(502, { 'content-type': 'application/json' });
+        clientRes.end(JSON.stringify({ error: `Upstream streaming error: ${e}` }));
+      }
+      resolve({ accumulated: '', status: 502 });
+    });
+
+    outReq.write(body);
+    outReq.end();
+  });
+}
+
 export async function startProxyServer(context: vscode.ExtensionContext): Promise<void> {
   sessionToken = context.globalState.get<string>('tpt.sessionToken');
   if (!sessionToken) {
@@ -124,7 +235,10 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
   const port = await findFreePort(PREFERRED_PORT);
   activePort = port;
 
-  // Inject ANTHROPIC_BASE_URL into VS Code terminal environments
+  // Kick off non-blocking pricing fetch (uses cached data on subsequent activations)
+  const initConfig = getConfig();
+  initPricing(initConfig.openrouterApiKey).catch(() => { /* ignore network errors */ });
+
   await injectTerminalEnv(context, port);
 
   server = http.createServer(async (req, res) => {
@@ -133,8 +247,9 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
     // Security: require session token on all requests
     const incomingToken = req.headers['x-tpt-token'] as string | undefined;
     if (incomingToken !== sessionToken) {
-      res.writeHead(401, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Unauthorized — missing or invalid X-TPT-Token header' }));
+      sendErrorJson(res, 401,
+        'Unauthorized: missing or invalid X-TPT-Token header. ' +
+        'Run "TPT: Copy Proxy URL to Clipboard" to get your session token.');
       return;
     }
 
@@ -143,6 +258,22 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
       const rawBody = await readBody(req);
       const upstream = resolveUpstreamUrl(config);
       const format = detectFormat(req.url ?? '/');
+
+      // Detect streaming to avoid buffering SSE responses
+      let isStreamingBypass = false;
+      try {
+        isStreamingBypass = (JSON.parse(rawBody) as Record<string, unknown>).stream === true;
+      } catch { /* non-JSON body */ }
+
+      if (isStreamingBypass) {
+        await forwardStreamingRequest(
+          upstream.baseUrl, upstream.apiKey,
+          req.url ?? '/', req.method ?? 'POST',
+          req.headers, rawBody, format, config.upstreamProvider, res
+        );
+        return;
+      }
+
       try {
         const forwarded = await forwardRequest(
           upstream.baseUrl, upstream.apiKey,
@@ -152,8 +283,7 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
         res.writeHead(forwarded.status, forwarded.headers as Record<string, string>);
         res.end(forwarded.body);
       } catch (e) {
-        res.writeHead(502, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: String(e) }));
+        sendErrorJson(res, 502, `Upstream request failed: ${e}`);
       }
       return;
     }
@@ -164,8 +294,7 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
     try {
       parsedBody = JSON.parse(rawBody);
     } catch {
-      res.writeHead(400, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+      sendErrorJson(res, 400, 'Invalid JSON body');
       return;
     }
 
@@ -183,8 +312,7 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
       pipelineResult = await runPipeline(proxyReq);
     } catch (e) {
       log(`Pipeline error: ${e}`);
-      res.writeHead(500, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: `TPT pipeline error: ${e}` }));
+      sendErrorJson(res, 500, `TPT pipeline error: ${e}`);
       return;
     }
 
@@ -204,7 +332,41 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
       return;
     }
 
-    // Determine upstream target
+    // Streaming path — pipe SSE chunks directly to the client
+    const isStreaming = !!(pipelineResult.body as Record<string, unknown>).stream;
+    if (isStreaming) {
+      const upstream = pipelineResult.overrideUpstream ?? resolveUpstreamUrl(config);
+      const outBody = JSON.stringify(pipelineResult.body);
+      const tokensIn = countTokens(pipelineResult.body as AnthropicRequest | OpenAIRequest);
+      try {
+        const { accumulated, status } = await forwardStreamingRequest(
+          upstream.baseUrl, upstream.apiKey,
+          req.url ?? '/', req.method ?? 'POST',
+          req.headers, outBody, format, config.upstreamProvider, res
+        );
+        if (status === 200) {
+          const tokensOut = estimateStreamingTokensOut(accumulated, format);
+          await recordRequest({
+            model: (pipelineResult.body as AnthropicRequest).model ?? 'unknown',
+            tokensIn,
+            tokensOut,
+            costUsd: getCostUsd((pipelineResult.body as AnthropicRequest).model ?? '', tokensIn, tokensOut),
+            moduleActions: pipelineResult.moduleActions,
+            cacheHit: false,
+          });
+          if (config.silentEdit.enabled) {
+            await handleSilentEditStreamResponse(accumulated, format);
+          }
+          checkBudget().catch(() => { /* ignore */ });
+        }
+      } catch (e) {
+        log(`Streaming upstream error: ${e}`);
+        sendErrorJson(res, 502, `Upstream streaming failed: ${e}`);
+      }
+      return;
+    }
+
+    // Non-streaming path
     const upstream = pipelineResult.overrideUpstream ?? resolveUpstreamUrl(config);
     const outBody = JSON.stringify(pipelineResult.body);
     const tokensIn = countTokens(pipelineResult.body as AnthropicRequest | OpenAIRequest);
@@ -218,12 +380,11 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
       );
     } catch (e) {
       log(`Upstream error: ${e}`);
-      res.writeHead(502, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: `Upstream request failed: ${e}` }));
+      sendErrorJson(res, 502, `Upstream request failed: ${e}`);
       return;
     }
 
-    // Store in cache if Token Shield is on
+    // Store in Token Shield cache
     if (config.tokenShield.enabled && forwarded.status === 200 &&
         'messages' in pipelineResult.body && Array.isArray((pipelineResult.body as AnthropicRequest).messages)) {
       await storeCachedResponse(
@@ -233,7 +394,7 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
       );
     }
 
-    // Handle Silent Edit response interception
+    // Silent Edit response interception
     let finalBody = forwarded.body;
     if (config.silentEdit.enabled && forwarded.status === 200) {
       finalBody = await handleSilentEditResponse(forwarded.body);
@@ -244,13 +405,13 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
       model: (pipelineResult.body as AnthropicRequest).model ?? 'unknown',
       tokensIn,
       tokensOut,
-      costUsd: estimateCost((pipelineResult.body as AnthropicRequest).model ?? '', tokensIn, tokensOut),
+      costUsd: getCostUsd((pipelineResult.body as AnthropicRequest).model ?? '', tokensIn, tokensOut),
       moduleActions: pipelineResult.moduleActions,
       cacheHit: false,
     });
+    checkBudget().catch(() => { /* ignore */ });
 
-    const responseHeaders: Record<string, string> = { 'content-type': 'application/json' };
-    res.writeHead(forwarded.status, responseHeaders);
+    res.writeHead(forwarded.status, { 'content-type': 'application/json' });
     res.end(finalBody);
   });
 
@@ -270,7 +431,6 @@ export function stopProxyServer(): void {
 }
 
 async function injectTerminalEnv(context: vscode.ExtensionContext, port: number): Promise<void> {
-  // Persist terminal env injection so new terminals pick it up
   const cfg = vscode.workspace.getConfiguration();
   const proxyUrl = `http://localhost:${port}`;
   const token = sessionToken!;
@@ -281,7 +441,6 @@ async function injectTerminalEnv(context: vscode.ExtensionContext, port: number)
     TPT_TOKEN: token,
   };
 
-  // Write to all three platform keys
   for (const key of ['terminal.integrated.env.windows', 'terminal.integrated.env.linux', 'terminal.integrated.env.osx']) {
     const current = cfg.get<Record<string, string>>(key, {});
     await cfg.update(key, { ...current, ...envPatch }, vscode.ConfigurationTarget.Workspace);
@@ -291,17 +450,62 @@ async function injectTerminalEnv(context: vscode.ExtensionContext, port: number)
 function estimateOutputTokens(responseBody: string): number {
   try {
     const parsed = JSON.parse(responseBody);
-    // Anthropic format
     if (parsed.usage?.output_tokens) return parsed.usage.output_tokens;
-    // OpenAI format
     if (parsed.usage?.completion_tokens) return parsed.usage.completion_tokens;
   } catch { /* ignore */ }
-  // Rough estimate: ~4 chars per token
   return Math.ceil(responseBody.length / 4);
 }
 
+// Extract output token count from an accumulated SSE stream body.
+// Scans from the end to find the usage event (most providers emit it last).
+function estimateStreamingTokensOut(sseBody: string, format: 'anthropic' | 'openai'): number {
+  const lines = sseBody.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line.startsWith('data: ')) continue;
+    const data = line.slice(6).trim();
+    if (data === '[DONE]') continue;
+    try {
+      const parsed = JSON.parse(data);
+      // Anthropic: message_delta event carries output_tokens in usage
+      if (format === 'anthropic' && parsed.type === 'message_delta' && parsed.usage?.output_tokens) {
+        return parsed.usage.output_tokens;
+      }
+      // OpenAI: some providers include usage in a final non-[DONE] chunk
+      if (format === 'openai' && parsed.usage?.completion_tokens) {
+        return parsed.usage.completion_tokens;
+      }
+    } catch { /* skip malformed event */ }
+  }
+  // Rough fallback: SSE overhead is significant so divide by more than plain JSON
+  return Math.ceil(sseBody.length / 20);
+}
+
+let budgetAlertShownToday = '';
+
+async function checkBudget(): Promise<void> {
+  const cfg = getConfig();
+  const limit = cfg.costBudget.dailyLimitUsd;
+  if (!limit) return;
+
+  const todayKey = new Date().toISOString().slice(0, 10);
+  if (budgetAlertShownToday === todayKey) return;
+
+  const spent = await getTodayCostUsd();
+  if (spent >= limit) {
+    budgetAlertShownToday = todayKey;
+    vscode.window.showWarningMessage(
+      `TPT: Daily spend limit of $${limit.toFixed(2)} reached — today's cost is $${spent.toFixed(4)}.`,
+      'Open Dashboard'
+    ).then((choice) => {
+      if (choice === 'Open Dashboard') {
+        vscode.commands.executeCommand('tpt.showDashboard');
+      }
+    });
+  }
+}
+
 function estimateCost(model: string, tokensIn: number, tokensOut: number): number {
-  // Very rough estimates — Router module refines these over time
   const m = model.toLowerCase();
   if (m.includes('claude-3-5-sonnet') || m.includes('claude-sonnet-4')) {
     return (tokensIn * 3 + tokensOut * 15) / 1_000_000;
@@ -315,6 +519,23 @@ function estimateCost(model: string, tokensIn: number, tokensOut: number): numbe
   if (m.includes('gpt-4o-mini')) {
     return (tokensIn * 0.15 + tokensOut * 0.6) / 1_000_000;
   }
-  // Default: assume ~$3/$15 per million in/out
+  if (m.includes('deepseek-chat') || m.includes('deepseek-v3')) {
+    return (tokensIn * 0.27 + tokensOut * 1.1) / 1_000_000;
+  }
+  if (m.includes('deepseek-r1')) {
+    return (tokensIn * 0.55 + tokensOut * 2.19) / 1_000_000;
+  }
+  if (m.includes('grok-3-mini')) {
+    return (tokensIn * 0.3 + tokensOut * 0.5) / 1_000_000;
+  }
+  if (m.includes('grok')) {
+    return (tokensIn * 3 + tokensOut * 15) / 1_000_000;
+  }
+  if (m.includes('qwen') || m.includes('qwq')) {
+    return (tokensIn * 0.4 + tokensOut * 1.2) / 1_000_000;
+  }
+  if (m.includes('moonshot') || m.includes('kimi')) {
+    return (tokensIn * 1.0 + tokensOut * 3.0) / 1_000_000;
+  }
   return (tokensIn * 3 + tokensOut * 15) / 1_000_000;
 }

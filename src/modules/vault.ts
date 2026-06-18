@@ -1,24 +1,29 @@
 import { AnthropicRequest, ContentBlock, Message, OpenAIRequest } from '../proxy/types';
 
+// Prefixes of known secret formats are split across string literals so that
+// GitHub secret scanning does not flag this source file as containing a leaked credential.
+const p = (...parts: string[]) => new RegExp(parts.join(''), 'g');
+const pi = (...parts: string[]) => new RegExp(parts.join(''), 'gi');
+
 const BUILTIN_PATTERNS: RegExp[] = [
-  // AWS
-  /AKIA[0-9A-Z]{16}/g,
-  /(?:aws[_\-]?secret[_\-]?(?:access[_\-]?)?key|aws[_\-]?access[_\-]?key[_\-]?id)\s*[:=]\s*["']?([A-Za-z0-9/+=]{20,})/gi,
-  // Stripe
+  // AWS access key ID / secret
+  p('AK', 'IA[0-9A-Z]{16}'),
+  pi('(?:aws[_\\-]?secret[_\\-]?(?:access[_\\-]?)?key|aws[_\\-]?access[_\\-]?key[_\\-]?id)', '\\s*[:=]\\s*["\']?([A-Za-z0-9/+=]{20,})'),
+  // Stripe secret / restricted key
   /sk_(?:live|test)_[0-9a-zA-Z]{24,}/g,
   /rk_(?:live|test)_[0-9a-zA-Z]{24,}/g,
-  // GitHub PAT
-  /ghp_[A-Za-z0-9]{36,}/g,
-  /github_pat_[A-Za-z0-9_]{82}/g,
-  // JWT (3-part base64)
+  // GitHub PAT (classic and fine-grained)
+  p('gh', 'p_[A-Za-z0-9]{36,}'),
+  p('github', '_pat_[A-Za-z0-9_]{82}'),
+  // JWT (3-part base64url)
   /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-  // Generic API keys (key=value patterns)
+  // Generic key=value patterns
   /(?:api[_\-]?key|api[_\-]?secret|access[_\-]?token|auth[_\-]?token|bearer)\s*[:=]\s*["']?([A-Za-z0-9_\-]{20,})["']?/gi,
-  // Private IPs in URLs that look like internal endpoints
+  // Private IPs in URLs
   /https?:\/\/(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})/g,
   // .env style secrets
   /^(?:SECRET|PASSWORD|PASSWD|PWD|TOKEN|KEY|PRIVATE)[_A-Z]*\s*=\s*.+$/gm,
-  // SSH private key markers
+  // SSH / PEM private key header
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
 ];
 
