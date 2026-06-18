@@ -26,7 +26,16 @@ export interface TptConfig {
   customApiKey: string;
   vault: { enabled: boolean; customRegex: string[] };
   smartContext: { enabled: boolean; maxFileSize: number };
-  tokenShield: { enabled: boolean; maxCacheSizeMB: number };
+  tokenShield: {
+    enabled: boolean;
+    maxCacheSizeMB: number;
+    semanticCache: {
+      enabled: boolean;
+      similarityThreshold: number;
+      ollamaModel: string;
+      ollamaBaseUrl: string;
+    };
+  };
   memoryWeaver: {
     enabled: boolean;
     tokenThreshold: number;
@@ -39,7 +48,7 @@ export interface TptConfig {
   silentEdit: { enabled: boolean };
   forge: { autoUpdate: boolean; registryUrl: string };
   terminal: { verboseLogging: boolean };
-  costBudget: { dailyLimitUsd: number };
+  costBudget: { dailyLimitUsd: number; monthlyLimitUsd: number; hardStop: boolean; quotaPollingIntervalSec: number };
 }
 
 export interface RouterRule {
@@ -74,6 +83,12 @@ export function getConfig(): TptConfig {
     tokenShield: {
       enabled: c.get<boolean>('tokenShield.enabled', true),
       maxCacheSizeMB: c.get<number>('tokenShield.maxCacheSizeMB', 256),
+      semanticCache: {
+        enabled: c.get<boolean>('tokenShield.semanticCache.enabled', false),
+        similarityThreshold: c.get<number>('tokenShield.semanticCache.similarityThreshold', 0.92),
+        ollamaModel: c.get<string>('tokenShield.semanticCache.ollamaModel', 'nomic-embed-text'),
+        ollamaBaseUrl: c.get<string>('tokenShield.semanticCache.ollamaBaseUrl', 'http://localhost:11434'),
+      },
     },
     memoryWeaver: {
       enabled: c.get<boolean>('memoryWeaver.enabled', true),
@@ -99,8 +114,38 @@ export function getConfig(): TptConfig {
     },
     costBudget: {
       dailyLimitUsd: c.get<number>('costBudget.dailyLimitUsd', 0),
+      monthlyLimitUsd: c.get<number>('costBudget.monthlyLimitUsd', 0),
+      hardStop: c.get<boolean>('costBudget.hardStop', false),
+      quotaPollingIntervalSec: c.get<number>('costBudget.quotaPollingIntervalSec', 180),
     },
   };
+}
+
+// Blocks SSRF attacks via user-configurable URL fields.
+// Allows localhost by name (needed for Ollama) but rejects numeric private/reserved IPs.
+export function validateUserSuppliedUrl(raw: string): void {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`Invalid URL: ${raw}`);
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new Error(`Only http/https URLs are allowed (got ${url.protocol})`);
+  }
+  const h = url.hostname.toLowerCase();
+  // Block numeric private/reserved IP ranges; allow 'localhost' by name for local services
+  const blockedNumericIp =
+    /^127\./.test(h) ||
+    /^10\./.test(h) ||
+    /^192\.168\./.test(h) ||
+    /^169\.254\./.test(h) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||
+    h === '0.0.0.0' ||
+    h === '::1';
+  if (blockedNumericIp) {
+    throw new Error(`Private/reserved IP ranges are not allowed as upstream URLs: ${h}`);
+  }
 }
 
 export function resolveUpstreamUrl(config: TptConfig): { baseUrl: string; apiKey: string } {
@@ -117,10 +162,14 @@ export function resolveUpstreamUrl(config: TptConfig): { baseUrl: string; apiKey
       return { baseUrl: 'https://api.moonshot.cn/v1', apiKey: config.kimiApiKey };
     case 'grok':
       return { baseUrl: 'https://api.x.ai/v1', apiKey: config.grokApiKey };
-    case 'local':
+    case 'local': {
+      validateUserSuppliedUrl(config.localBaseUrl || 'http://localhost:11434/v1');
       return { baseUrl: config.localBaseUrl, apiKey: '' };
-    case 'custom':
+    }
+    case 'custom': {
+      validateUserSuppliedUrl(config.customBaseUrl || 'http://localhost');
       return { baseUrl: config.customBaseUrl, apiKey: config.customApiKey };
+    }
     case 'openrouter':
     default:
       return { baseUrl: 'https://openrouter.ai/api/v1', apiKey: config.openrouterApiKey };

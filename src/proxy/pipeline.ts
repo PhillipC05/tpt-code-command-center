@@ -7,6 +7,7 @@ import { runTokenShield } from '../modules/tokenShield';
 import { runMemoryWeaver } from '../modules/memoryWeaver';
 import { runRouter } from '../modules/router';
 import { runSilentEditInjection } from '../modules/silentEdit';
+import { storeInspectSnapshot } from '../utils/inspectStore';
 
 export interface PipelineResult {
   body: AnthropicRequest | OpenAIRequest | Record<string, unknown>;
@@ -19,6 +20,7 @@ export async function runPipeline(req: ProxyRequest): Promise<PipelineResult> {
   const config = getConfig();
   const actions: string[] = [];
   let body = req.body as AnthropicRequest | OpenAIRequest;
+  const originalBody = req.body;
 
   if (config.terminal.verboseLogging) {
     log(`Pipeline start — path=${req.path} format=${req.format}`, true);
@@ -38,10 +40,11 @@ export async function runPipeline(req: ProxyRequest): Promise<PipelineResult> {
   //    are buffered JSON, not SSE, so returning one to a streaming client would break the protocol)
   const isStreaming = !!(body as Record<string, unknown>).stream;
   if (config.tokenShield.enabled && !isStreaming && 'messages' in body && Array.isArray(body.messages)) {
-    const cached = await runTokenShield(body.messages);
+    const cached = await runTokenShield(body.messages, config.tokenShield);
     if (cached) {
       actions.push('tokenShield:hit');
       log('Token Shield cache hit — skipping upstream');
+      storeInspectSnapshot({ timestamp: Date.now(), format: req.format, originalBody, processedBody: body, moduleActions: [...actions], cacheHit: true });
       return { body, cachedResponse: cached, moduleActions: actions };
     }
   }
@@ -84,5 +87,6 @@ export async function runPipeline(req: ProxyRequest): Promise<PipelineResult> {
     log(`Pipeline complete — actions=[${actions.join(', ')}]`, true);
   }
 
+  storeInspectSnapshot({ timestamp: Date.now(), format: req.format, originalBody, processedBody: body, moduleActions: [...actions], overrideUpstream, cacheHit: false });
   return { body, overrideUpstream, moduleActions: actions };
 }

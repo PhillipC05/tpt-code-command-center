@@ -1,7 +1,9 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import * as http from 'http';
 import * as vscode from 'vscode';
 import { hashPrompt } from '../utils/hash';
+import { validateUserSuppliedUrl } from '../utils/config';
 import { Message } from '../proxy/types';
 import type { Database } from 'sql.js';
 
@@ -39,6 +41,17 @@ async function getDb(): Promise<Database> {
     )
   `);
 
+  // Semantic cache table: stores embedding as JSON-serialised float array
+  db!.run(`
+    CREATE TABLE IF NOT EXISTS embeddings (
+      hash TEXT PRIMARY KEY,
+      embedding TEXT NOT NULL,
+      response TEXT NOT NULL,
+      ts INTEGER NOT NULL,
+      size INTEGER NOT NULL
+    )
+  `);
+
   return db!;
 }
 
@@ -58,21 +71,46 @@ function persistDb(): void {
   fs.writeFileSync(path.join(tptDir, 'cache.db'), Buffer.from(data));
 }
 
-export async function runTokenShield(messages: Message[]): Promise<string | null> {
+// ── Exact-match cache ────────────────────────────────────────────────────────
+
+export interface TokenShieldConfig {
+  enabled: boolean;
+  maxCacheSizeMB: number;
+  semanticCache: {
+    enabled: boolean;
+    similarityThreshold: number;
+    ollamaModel: string;
+    ollamaBaseUrl: string;
+  };
+}
+
+export async function runTokenShield(messages: Message[], config: TokenShieldConfig): Promise<string | null> {
   const hash = hashPrompt(messages);
   const database = await getDb();
+
+  // 1. Exact hash match
   const result = database.exec('SELECT response FROM cache WHERE hash = ?', [hash]);
-  return (result[0]?.values[0]?.[0] as string) ?? null;
+  const exact = (result[0]?.values[0]?.[0] as string) ?? null;
+  if (exact) return exact;
+
+  // 2. Semantic match (opt-in, requires Ollama)
+  if (config.semanticCache.enabled) {
+    const semanticHit = await semanticLookup(messages, database, config.semanticCache);
+    if (semanticHit) return semanticHit;
+  }
+
+  return null;
 }
 
 export async function storeCachedResponse(
   messages: Message[],
   response: string,
-  maxCacheSizeMB: number
+  config: TokenShieldConfig
 ): Promise<void> {
   const hash = hashPrompt(messages);
   const database = await getDb();
   const size = Buffer.byteLength(response);
+  const maxCacheSizeMB = config.maxCacheSizeMB;
 
   database.run(
     'INSERT OR REPLACE INTO cache (hash, response, ts, size) VALUES (?,?,?,?)',
@@ -98,11 +136,146 @@ export async function storeCachedResponse(
     `, [maxBytes * 0.9]);
   }
 
+  // Also store embedding for semantic cache
+  if (config.semanticCache.enabled) {
+    storeEmbedding(messages, response, database, config.semanticCache, maxBytes).catch(() => { /* non-fatal */ });
+  }
+
   persistDb();
 }
 
 export async function clearCache(): Promise<void> {
   const database = await getDb();
   database.run('DELETE FROM cache');
+  database.run('DELETE FROM embeddings');
+  persistDb();
+}
+
+// ── Semantic cache (Ollama embeddings) ───────────────────────────────────────
+
+interface SemanticConfig {
+  enabled: boolean;
+  similarityThreshold: number;
+  ollamaModel: string;
+  ollamaBaseUrl: string;
+}
+
+function messagesText(messages: Message[]): string {
+  return messages
+    .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
+    .join('\n')
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+    .slice(0, 4096); // cap to keep embedding call fast
+}
+
+async function fetchEmbedding(text: string, cfg: SemanticConfig): Promise<number[] | null> {
+  return new Promise((resolve) => {
+    const body = JSON.stringify({ model: cfg.ollamaModel, prompt: text });
+    let url: URL;
+    try {
+      validateUserSuppliedUrl(cfg.ollamaBaseUrl);
+      url = new URL(`${cfg.ollamaBaseUrl.replace(/\/$/, '')}/api/embeddings`);
+    } catch {
+      resolve(null);
+      return;
+    }
+
+    const options = {
+      hostname: url.hostname,
+      port: url.port || 11434,
+      path: url.pathname,
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+    };
+
+    const req = http.request(options, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          resolve(Array.isArray(json.embedding) ? (json.embedding as number[]) : null);
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.setTimeout(5000, () => { req.destroy(); resolve(null); });
+    req.write(body);
+    req.end();
+  });
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+async function semanticLookup(messages: Message[], database: Database, cfg: SemanticConfig): Promise<string | null> {
+  const text = messagesText(messages);
+  const queryEmbedding = await fetchEmbedding(text, cfg);
+  if (!queryEmbedding) return null;
+
+  const rows = database.exec('SELECT embedding, response FROM embeddings ORDER BY ts DESC LIMIT 200');
+  const entries = rows[0]?.values ?? [];
+
+  let bestScore = -1;
+  let bestResponse: string | null = null;
+
+  for (const row of entries) {
+    try {
+      const stored: number[] = JSON.parse(row[0] as string);
+      const score = cosineSimilarity(queryEmbedding, stored);
+      if (score > bestScore) {
+        bestScore = score;
+        bestResponse = row[1] as string;
+      }
+    } catch { /* skip malformed */ }
+  }
+
+  if (bestScore >= cfg.similarityThreshold && bestResponse) {
+    return bestResponse;
+  }
+  return null;
+}
+
+async function storeEmbedding(
+  messages: Message[],
+  response: string,
+  database: Database,
+  cfg: SemanticConfig,
+  maxBytes: number
+): Promise<void> {
+  const text = messagesText(messages);
+  const embedding = await fetchEmbedding(text, cfg);
+  if (!embedding) return;
+
+  const hash = hashPrompt(messages);
+  const embJson = JSON.stringify(embedding);
+  const size = Buffer.byteLength(response) + Buffer.byteLength(embJson);
+
+  database.run(
+    'INSERT OR REPLACE INTO embeddings (hash, embedding, response, ts, size) VALUES (?,?,?,?,?)',
+    [hash, embJson, response, Date.now(), size]
+  );
+
+  // Enforce the same size cap on embeddings table
+  const totalResult = database.exec('SELECT SUM(size) FROM embeddings');
+  const totalSize = Number(totalResult[0]?.values[0]?.[0] ?? 0);
+  if (totalSize > maxBytes) {
+    database.run(
+      'DELETE FROM embeddings WHERE hash IN (SELECT hash FROM embeddings ORDER BY ts ASC LIMIT 20)'
+    );
+  }
+
   persistDb();
 }

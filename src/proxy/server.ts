@@ -9,13 +9,39 @@ import { recordRequest } from '../ledger/ledger';
 import { storeCachedResponse } from '../modules/tokenShield';
 import { handleSilentEditResponse, handleSilentEditStreamResponse } from '../modules/silentEdit';
 import { AnthropicRequest, OpenAIRequest, ProxyRequest } from './types';
-import { countTokens, getTodayCostUsd } from '../ledger/ledger';
+import { countTokens, getTodayCostUsd, getThisMonthCostUsd } from '../ledger/ledger';
 import { getCostUsd, initPricing } from '../ledger/pricing';
+import { captureRateLimitHeaders } from '../modules/quotaTracker';
 
 const PREFERRED_PORT = 7331;
+
+// Only forward a safe subset of upstream response headers to avoid header injection
+// or leaking internal provider headers (set-cookie, x-internal-*, etc.)
+const SAFE_RESPONSE_HEADERS = new Set([
+  'content-type', 'content-length', 'retry-after', 'x-request-id', 'date',
+  // Anthropic rate-limit headers (requests + tokens)
+  'anthropic-ratelimit-requests-limit', 'anthropic-ratelimit-requests-remaining',
+  'anthropic-ratelimit-tokens-limit', 'anthropic-ratelimit-tokens-remaining',
+  'anthropic-ratelimit-tokens-reset', 'anthropic-ratelimit-requests-reset',
+  // OpenAI / xAI / compatible providers
+  'x-ratelimit-limit-requests', 'x-ratelimit-remaining-requests', 'x-ratelimit-reset-requests',
+  'x-ratelimit-limit-tokens', 'x-ratelimit-remaining-tokens', 'x-ratelimit-reset-tokens',
+]);
+
+function filterResponseHeaders(headers: http.IncomingHttpHeaders): Record<string, string> {
+  const safe: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (SAFE_RESPONSE_HEADERS.has(k.toLowerCase()) && typeof v === 'string') {
+      safe[k] = v;
+    }
+  }
+  return safe;
+}
 let server: http.Server | undefined;
 let activePort: number | undefined;
 let sessionToken: string | undefined;
+let serverState: 'starting' | 'running' | 'error' = 'starting';
+let serverError: string | undefined;
 
 export function getProxyUrl(): string | undefined {
   return activePort ? `http://localhost:${activePort}` : undefined;
@@ -23,6 +49,10 @@ export function getProxyUrl(): string | undefined {
 
 export function getSessionToken(): string | undefined {
   return sessionToken;
+}
+
+export function getServerState(): { state: typeof serverState; error?: string } {
+  return { state: serverState, error: serverError };
 }
 
 async function findFreePort(start: number): Promise<number> {
@@ -43,10 +73,21 @@ function detectFormat(path: string): 'anthropic' | 'openai' {
   return 'openai';
 }
 
+const MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB
+
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (c: Buffer) => chunks.push(c));
+    let totalBytes = 0;
+    req.on('data', (c: Buffer) => {
+      totalBytes += c.length;
+      if (totalBytes > MAX_BODY_BYTES) {
+        req.destroy();
+        reject(new Error('Request body too large'));
+        return;
+      }
+      chunks.push(c);
+    });
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
@@ -253,9 +294,37 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
       return;
     }
 
+    // Hard budget stop — block request before any processing
+    if (config.enabled && config.costBudget.hardStop) {
+      if (config.costBudget.dailyLimitUsd > 0) {
+        const spent = await getTodayCostUsd();
+        if (spent >= config.costBudget.dailyLimitUsd) {
+          sendErrorJson(res, 429,
+            `TPT: Daily budget of $${config.costBudget.dailyLimitUsd.toFixed(2)} exceeded ` +
+            `(spent $${spent.toFixed(4)} today). Increase tpt.costBudget.dailyLimitUsd or disable hardStop.`);
+          return;
+        }
+      }
+      if (config.costBudget.monthlyLimitUsd > 0) {
+        const monthSpent = await getThisMonthCostUsd();
+        if (monthSpent >= config.costBudget.monthlyLimitUsd) {
+          sendErrorJson(res, 429,
+            `TPT: Monthly budget of $${config.costBudget.monthlyLimitUsd.toFixed(2)} exceeded ` +
+            `(spent $${monthSpent.toFixed(4)} this month). Increase tpt.costBudget.monthlyLimitUsd or disable hardStop.`);
+          return;
+        }
+      }
+    }
+
     // Bypass everything if master switch is off
     if (!config.enabled) {
-      const rawBody = await readBody(req);
+      let rawBody: string;
+      try {
+        rawBody = await readBody(req);
+      } catch (e) {
+        sendErrorJson(res, 413, `${e}`);
+        return;
+      }
       const upstream = resolveUpstreamUrl(config);
       const format = detectFormat(req.url ?? '/');
 
@@ -280,7 +349,8 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
           req.url ?? '/', req.method ?? 'POST',
           req.headers, rawBody, format, config.upstreamProvider
         );
-        res.writeHead(forwarded.status, forwarded.headers as Record<string, string>);
+        captureRateLimitHeaders(forwarded.headers as Record<string, string>);
+        res.writeHead(forwarded.status, filterResponseHeaders(forwarded.headers));
         res.end(forwarded.body);
       } catch (e) {
         sendErrorJson(res, 502, `Upstream request failed: ${e}`);
@@ -288,7 +358,13 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
       return;
     }
 
-    const rawBody = await readBody(req);
+    let rawBody: string;
+    try {
+      rawBody = await readBody(req);
+    } catch (e) {
+      sendErrorJson(res, 413, `${e}`);
+      return;
+    }
     const format = detectFormat(req.url ?? '/');
     let parsedBody: AnthropicRequest | OpenAIRequest | Record<string, unknown>;
     try {
@@ -390,7 +466,7 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
       await storeCachedResponse(
         (pipelineResult.body as AnthropicRequest).messages,
         forwarded.body,
-        config.tokenShield.maxCacheSizeMB
+        config.tokenShield
       );
     }
 
@@ -410,14 +486,25 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
       cacheHit: false,
     });
     checkBudget().catch(() => { /* ignore */ });
+    captureRateLimitHeaders(forwarded.headers as Record<string, string>);
 
     res.writeHead(forwarded.status, { 'content-type': 'application/json' });
     res.end(finalBody);
   });
 
-  server.listen(port, '127.0.0.1', () => {
-    log(`TPT proxy listening on http://localhost:${port}`);
-    vscode.commands.executeCommand('setContext', 'tpt.proxyActive', true);
+  await new Promise<void>((resolve, reject) => {
+    server!.once('error', (err: NodeJS.ErrnoException) => {
+      serverState = 'error';
+      serverError = err.message;
+      activePort = undefined;
+      reject(err);
+    });
+    server!.listen(port, '127.0.0.1', () => {
+      serverState = 'running';
+      log(`TPT proxy listening on http://localhost:${port}`);
+      vscode.commands.executeCommand('setContext', 'tpt.proxyActive', true);
+      resolve();
+    });
   });
 }
 
@@ -428,6 +515,8 @@ export function stopProxyServer(): void {
   });
   server = undefined;
   activePort = undefined;
+  serverState = 'starting';
+  serverError = undefined;
 }
 
 async function injectTerminalEnv(context: vscode.ExtensionContext, port: number): Promise<void> {
@@ -505,37 +594,3 @@ async function checkBudget(): Promise<void> {
   }
 }
 
-function estimateCost(model: string, tokensIn: number, tokensOut: number): number {
-  const m = model.toLowerCase();
-  if (m.includes('claude-3-5-sonnet') || m.includes('claude-sonnet-4')) {
-    return (tokensIn * 3 + tokensOut * 15) / 1_000_000;
-  }
-  if (m.includes('claude-haiku')) {
-    return (tokensIn * 0.25 + tokensOut * 1.25) / 1_000_000;
-  }
-  if (m.includes('gpt-4o')) {
-    return (tokensIn * 2.5 + tokensOut * 10) / 1_000_000;
-  }
-  if (m.includes('gpt-4o-mini')) {
-    return (tokensIn * 0.15 + tokensOut * 0.6) / 1_000_000;
-  }
-  if (m.includes('deepseek-chat') || m.includes('deepseek-v3')) {
-    return (tokensIn * 0.27 + tokensOut * 1.1) / 1_000_000;
-  }
-  if (m.includes('deepseek-r1')) {
-    return (tokensIn * 0.55 + tokensOut * 2.19) / 1_000_000;
-  }
-  if (m.includes('grok-3-mini')) {
-    return (tokensIn * 0.3 + tokensOut * 0.5) / 1_000_000;
-  }
-  if (m.includes('grok')) {
-    return (tokensIn * 3 + tokensOut * 15) / 1_000_000;
-  }
-  if (m.includes('qwen') || m.includes('qwq')) {
-    return (tokensIn * 0.4 + tokensOut * 1.2) / 1_000_000;
-  }
-  if (m.includes('moonshot') || m.includes('kimi')) {
-    return (tokensIn * 1.0 + tokensOut * 3.0) / 1_000_000;
-  }
-  return (tokensIn * 3 + tokensOut * 15) / 1_000_000;
-}

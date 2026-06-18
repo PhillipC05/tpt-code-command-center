@@ -251,6 +251,43 @@
           "type": "number",
           "default": 0,
           "description": "Daily spend limit in USD. A warning notification is shown when today's cost exceeds this value. Set to 0 to disable."
+        },
+        "tpt.costBudget.hardStop": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, requests are rejected with HTTP 429 once the daily or monthly limit is reached instead of just showing a warning."
+        },
+        "tpt.costBudget.monthlyLimitUsd": {
+          "type": "number",
+          "default": 0,
+          "description": "Monthly spend limit in USD. A warning is shown when this month's cost exceeds this value. Hard-stops requests when hardStop is true. Set to 0 to disable."
+        },
+        "tpt.costBudget.quotaPollingIntervalSec": {
+          "type": "number",
+          "default": 180,
+          "description": "How often (in seconds) to poll your LLM provider's balance/credits API for quota tracking. Only applies to providers that expose a balance endpoint (OpenRouter, DeepSeek). Set to 0 to disable polling."
+        },
+        "tpt.tokenShield.semanticCache.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "TPT Token Shield — enable semantic (fuzzy) prompt cache using local Ollama embeddings. Requires Ollama running locally with an embedding model pulled."
+        },
+        "tpt.tokenShield.semanticCache.similarityThreshold": {
+          "type": "number",
+          "default": 0.92,
+          "minimum": 0.5,
+          "maximum": 1.0,
+          "description": "Cosine similarity threshold for semantic cache hits (0–1). Higher values require closer matches. Default 0.92."
+        },
+        "tpt.tokenShield.semanticCache.ollamaModel": {
+          "type": "string",
+          "default": "nomic-embed-text",
+          "description": "Ollama embedding model to use for semantic cache. Pull first: ollama pull nomic-embed-text."
+        },
+        "tpt.tokenShield.semanticCache.ollamaBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Base URL of your local Ollama server for semantic cache embeddings."
         }
       }
     },
@@ -286,6 +323,34 @@
       {
         "command": "tpt.configureModels",
         "title": "TPT: Configure Models"
+      },
+      {
+        "command": "tpt.inspectLast",
+        "title": "TPT: Inspect Last Request"
+      },
+      {
+        "command": "tpt.showPromptDiff",
+        "title": "TPT: Show Prompt Diff"
+      },
+      {
+        "command": "tpt.exportLedger",
+        "title": "TPT: Export Ledger to CSV"
+      },
+      {
+        "command": "tpt.configureCline",
+        "title": "TPT: Auto-Configure Cline"
+      },
+      {
+        "command": "tpt.runSetupWizard",
+        "title": "TPT: Run Setup Wizard"
+      },
+      {
+        "command": "tpt.resetSetup",
+        "title": "TPT: Reset Credentials & Provider"
+      },
+      {
+        "command": "tpt.exportMonthlySummary",
+        "title": "TPT: Export Monthly Summary to Downloads"
       }
     ],
     "viewsContainers": {

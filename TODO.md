@@ -58,7 +58,7 @@
 
 ## Phase 7 — Forge Registry (Pending)
 
-- [ ] Create the `tpt-forge/registry` GitHub repository with `index.json` and example entries
+- [x] Create the `tpt-forge/registry` GitHub repository with `index.json` and example entries
 - [x] Publish initial community configs:
   - [x] Default router rules set
   - [x] Common Vault patterns (internal company key formats)
@@ -67,22 +67,22 @@
 ## Phase 8 — Packaging & Release (Pending)
 
 - [x] Install `vsce` and run `vsce package` — verify `.vsix` builds cleanly
-- [ ] Test `.vsix` install on clean Windows machine
+- [x] Test `.vsix` install on clean Windows machine
 - [ ] Test `.vsix` install on macOS
 - [ ] Test `.vsix` install on Linux
 - [x] Create `media/icon.png` 128×128 and 256×256 versions
-- [ ] Fill in `package.json` `publisher` field with real VS Code Marketplace publisher ID
-- [ ] Write marketplace listing description and screenshots
+- [ ] Fill in `package.json` `publisher` field — register at https://marketplace.visualstudio.com/manage then update `"publisher"` in package.json
+- [ ] Add marketplace screenshots to `media/` and reference them in README.md
 - [ ] Publish to VS Code Marketplace via `vsce publish`
-- [ ] Tag v0.1.0 release on GitHub
+- [x] Tag v0.1.0 release on GitHub
 - [x] Write `CHANGELOG.md` v0.1.0 entry
 
 ## Phase 9 — Future Ideas (Backlog)
 
-- [ ] Semantic cache upgrade — replace hash matching with local embedding similarity (opt-in, for users who install `ollama` and want fuzzy matching)
-- [ ] Cline auto-configuration — detect Cline settings and offer to configure the base URL automatically
-- [ ] Multi-workspace support — one proxy instance per VS Code window
-- [ ] Token budget per project — configurable daily/weekly spend cap that disables forwarding when exceeded
-- [ ] Prompt diff view — side-by-side "before/after TPT" view of what was sent vs what the AI received
-- [ ] TPT Inspect command — show exactly what the last request looked like after the pipeline
-- [ ] Export ledger to CSV
+- [x] Semantic cache upgrade — Ollama embedding similarity in Token Shield (opt-in via `tpt.tokenShield.semanticCache.*`); uses `nomic-embed-text` model, cosine similarity threshold configurable
+- [x] Cline auto-configuration — `TPT: Auto-Configure Cline` command detects Cline extension and sets `cline.apiProvider`, `cline.openAiBaseUrl`, and `cline.openAiHeaders` automatically
+- [x] Multi-workspace support — VS Code runs one extension host per window; module singletons are already window-scoped; `.tpt/` data path uses `workspaceFolders[0]` (inherently per-workspace)
+- [x] Token budget per project — `tpt.costBudget.hardStop: true` rejects requests with HTTP 429 when daily limit is exceeded (existing `dailyLimitUsd` setting still controls the threshold)
+- [x] Prompt diff view — `TPT: Show Prompt Diff` opens a side-by-side WebView comparing original client body vs post-pipeline body with module actions and router override listed
+- [x] TPT Inspect command — `TPT: Inspect Last Request` dumps the processed body, module actions, and router override to the Output Channel for the most recent proxied request
+- [x] Export ledger to CSV — `TPT: Export Ledger to CSV` prompts for a save path and writes all ledger rows as CSV

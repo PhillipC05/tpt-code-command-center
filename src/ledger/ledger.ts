@@ -90,6 +90,8 @@ export interface LedgerStats {
   totalCostUsd: number;
   cacheHits: number;
   estimatedSavingsUsd: number;
+  tokensSaved: number;
+  thisMonthCostUsd: number;
   last7Days: DayStat[];
 }
 
@@ -115,7 +117,18 @@ export async function getStats(): Promise<LedgerStats> {
   const cacheHits = Number(row[4]);
 
   const avgCost = totalRequests > 0 ? totalCostUsd / totalRequests : 0;
+  const avgTokensIn = totalRequests > 0 ? totalTokensIn / totalRequests : 0;
   const estimatedSavingsUsd = cacheHits * avgCost;
+  const tokensSaved = Math.round(cacheHits * avgTokensIn);
+
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+  const monthRows = database.exec(
+    'SELECT COALESCE(SUM(cost_usd), 0) FROM requests WHERE ts >= ?',
+    [startOfMonth.getTime()]
+  );
+  const thisMonthCostUsd = Number(monthRows[0]?.values[0]?.[0] ?? 0);
 
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const daily = database.exec(
@@ -133,7 +146,7 @@ export async function getStats(): Promise<LedgerStats> {
     cacheHits: Number(r[4]),
   }));
 
-  return { totalRequests, totalTokensIn, totalTokensOut, totalCostUsd, cacheHits, estimatedSavingsUsd, last7Days };
+  return { totalRequests, totalTokensIn, totalTokensOut, totalCostUsd, cacheHits, estimatedSavingsUsd, tokensSaved, thisMonthCostUsd, last7Days };
 }
 
 export interface ModelStat {
@@ -171,10 +184,78 @@ export async function getTodayCostUsd(): Promise<number> {
   return Number(rows[0]?.values[0]?.[0] ?? 0);
 }
 
+export async function getThisMonthCostUsd(): Promise<number> {
+  const database = await getDb();
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+  const rows = database.exec(
+    'SELECT COALESCE(SUM(cost_usd), 0) FROM requests WHERE ts >= ?',
+    [startOfMonth.getTime()]
+  );
+  return Number(rows[0]?.values[0]?.[0] ?? 0);
+}
+
+export interface MonthStat {
+  month: string;
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number;
+  cacheHits: number;
+  savedUsd: number;
+  tokensSaved: number;
+}
+
+export async function getMonthlyStats(months = 12): Promise<MonthStat[]> {
+  const database = await getDb();
+  const cutoff = Date.now() - months * 31 * 24 * 60 * 60 * 1000;
+  const rows = database.exec(
+    `SELECT
+       strftime('%Y-%m', ts/1000, 'unixepoch') as m,
+       SUM(tokens_in), SUM(tokens_out), SUM(cost_usd),
+       SUM(cache_hit), COUNT(*),
+       CASE WHEN COUNT(*) > 0 THEN SUM(cost_usd) / COUNT(*) ELSE 0 END as avg_cost,
+       CASE WHEN COUNT(*) > 0 THEN SUM(tokens_in) / COUNT(*) ELSE 0 END as avg_tok_in
+     FROM requests WHERE ts >= ?
+     GROUP BY m ORDER BY m DESC LIMIT ?`,
+    [cutoff, months]
+  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (rows[0]?.values ?? []).map((r: any) => {
+    const hits = Number(r[4]);
+    const avgCost = Number(r[6]);
+    const avgTokIn = Number(r[7]);
+    return {
+      month: String(r[0]),
+      tokensIn: Number(r[1]),
+      tokensOut: Number(r[2]),
+      costUsd: Number(r[3]),
+      cacheHits: hits,
+      savedUsd: hits * avgCost,
+      tokensSaved: Math.round(hits * avgTokIn),
+    };
+  });
+}
+
 export async function clearLedger(): Promise<void> {
   const database = await getDb();
   database.run('DELETE FROM requests');
   persistDb();
+}
+
+export async function exportLedgerCsv(): Promise<string> {
+  const database = await getDb();
+  const rows = database.exec(
+    `SELECT ts, model, tokens_in, tokens_out, cost_usd, cache_hit, module_actions
+     FROM requests ORDER BY ts ASC`
+  );
+  const header = 'timestamp,date,model,tokens_in,tokens_out,cost_usd,cache_hit,module_actions\n';
+  const lines = (rows[0]?.values ?? []).map((r) => {
+    const ts = Number(r[0]);
+    const date = new Date(ts).toISOString();
+    return [ts, date, `"${r[1]}"`, r[2], r[3], Number(r[4]).toFixed(8), r[5], `"${r[6]}"`].join(',');
+  });
+  return header + lines.join('\n');
 }
 
 export function countTokens(body: AnthropicRequest | OpenAIRequest): number {

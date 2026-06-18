@@ -17,8 +17,8 @@ const BUILTIN_PATTERNS: RegExp[] = [
   p('github', '_pat_[A-Za-z0-9_]{82}'),
   // JWT (3-part base64url)
   /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-  // Generic key=value patterns
-  /(?:api[_\-]?key|api[_\-]?secret|access[_\-]?token|auth[_\-]?token|bearer)\s*[:=]\s*["']?([A-Za-z0-9_\-]{20,})["']?/gi,
+  // Generic key=value patterns — lookahead prevents catastrophic backtracking on long non-matching strings
+  /(?:api[_\-]?key|api[_\-]?secret|access[_\-]?token|auth[_\-]?token|bearer)\s*[:=]\s*["']?([A-Za-z0-9_\-]{20,})(?=["'\s,\r\n]|$)/gi,
   // Private IPs in URLs
   /https?:\/\/(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})/g,
   // .env style secrets
@@ -28,6 +28,14 @@ const BUILTIN_PATTERNS: RegExp[] = [
 ];
 
 const REDACT_PLACEHOLDER = '[REDACTED]';
+
+// Lightweight ReDoS guard: rejects patterns with nested quantifiers like (a+)+ or (a|a)*
+// which are the most common source of catastrophic backtracking.
+function isSafeRegex(pattern: string): boolean {
+  // Reject patterns with repeated groups that themselves contain quantifiers
+  return !/\([^)]*[+*{][^)]*\)[+*{?]/.test(pattern) &&
+         !/(\[.*?\]|\\?.)[+*]\)?[+*{]/.test(pattern);
+}
 
 export interface VaultResult {
   body: AnthropicRequest | OpenAIRequest | Record<string, unknown>;
@@ -40,16 +48,22 @@ export function runVault(
 ): VaultResult {
   const patterns = [...BUILTIN_PATTERNS];
   for (const pattern of customRegex) {
+    if (!isSafeRegex(pattern)) {
+      // Pattern has catastrophic backtracking potential — skip to prevent DoS
+      continue;
+    }
     try {
       patterns.push(new RegExp(pattern, 'g'));
     } catch {
-      // Invalid regex — skip
+      // Invalid regex syntax — skip
     }
   }
 
   let count = 0;
 
   function redactText(text: string): string {
+    // Skip very large blocks — they are file content, not inline credentials
+    if (text.length > 200_000) return text;
     let out = text;
     for (const re of patterns) {
       re.lastIndex = 0;

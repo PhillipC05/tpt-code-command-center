@@ -1,13 +1,51 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { startProxyServer, stopProxyServer, getProxyUrl, getSessionToken } from './proxy/server';
 import { createStatusBar, updateStatusBar, showToggleMenu, disposeStatusBar } from './ui/statusBar';
 import { showDashboard, refreshDashboard, disposeDashboard } from './ui/dashboard';
-import { getStats, clearLedger } from './ledger/ledger';
+import * as os from 'os';
+import { getStats, clearLedger, exportLedgerCsv, getMonthlyStats } from './ledger/ledger';
+import { startQuotaPolling, stopQuotaPolling } from './modules/quotaTracker';
 import { clearCache } from './modules/tokenShield';
 import { browseForge } from './modules/forge';
 import { setWasmDir } from './modules/smartContext';
 import { showModelPicker } from './ui/modelPicker';
 import { log, getChannel, disposeChannel } from './utils/logger';
+import { getLastInspectSnapshot } from './utils/inspectStore';
+import { showPromptDiff } from './ui/promptDiff';
+import { configureClineAuto } from './modules/clineConfig';
+import { runSetupWizard } from './ui/setupWizard';
+import { getConfig } from './utils/config';
+
+function checkGitignore(context: vscode.ExtensionContext): void {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders?.length) return;
+  const root = folders[0].uri.fsPath;
+  const gitignorePath = path.join(root, '.gitignore');
+  if (!fs.existsSync(gitignorePath)) return;
+  const content = fs.readFileSync(gitignorePath, 'utf8');
+  // Check if .vscode/settings.json is already ignored (various common forms)
+  const alreadyIgnored = content.split('\n').some((line) => {
+    const t = line.trim();
+    return t === '.vscode/settings.json' || t === '.vscode/' || t === '.vscode';
+  });
+  if (alreadyIgnored) return;
+  const stateKey = 'tpt.gitignorePromptDismissed';
+  if (context.globalState.get<boolean>(stateKey)) return;
+  vscode.window.showWarningMessage(
+    'TPT writes API keys and a session token to .vscode/settings.json. Add it to .gitignore to avoid accidental commits?',
+    'Add to .gitignore', 'Not now'
+  ).then((choice) => {
+    if (choice === 'Add to .gitignore') {
+      const entry = '\n# TPT Code Command Center — contains API keys and session token\n.vscode/settings.json\n';
+      fs.appendFileSync(gitignorePath, entry, 'utf8');
+      vscode.window.showInformationMessage('Added .vscode/settings.json to .gitignore.');
+    } else {
+      context.globalState.update(stateKey, true);
+    }
+  });
+}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   log('TPT Code Command Center activating...');
@@ -16,19 +54,56 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const wasmDir = require('path').join(context.extensionPath, 'media', 'wasm');
   setWasmDir(wasmDir);
 
-  // Start proxy server
-  await startProxyServer(context);
-
-  // Status bar
+  // Status bar — show spinner immediately while the server starts
   const statusBar = createStatusBar();
   context.subscriptions.push(statusBar);
 
-  // Keep status bar updated on config changes
+  // Guard against accidental API key commits
+  checkGitignore(context);
+
+  // Start proxy server — update status bar on completion or failure
+  try {
+    await startProxyServer(context);
+    updateStatusBar();
+    startQuotaPolling(getConfig());
+  } catch (err) {
+    updateStatusBar();
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`TPT proxy failed to start: ${msg}`);
+    vscode.window.showErrorMessage(
+      `TPT proxy failed to start: ${msg}`,
+      'Show Output'
+    ).then((choice) => {
+      if (choice === 'Show Output') getChannel().show(true);
+    });
+    return;
+  }
+
+  // First-run: offer setup wizard if no API key is configured
+  const cfg = vscode.workspace.getConfiguration('tpt');
+  const hasAnyKey = ['openrouterApiKey', 'anthropicApiKey', 'openaiApiKey', 'deepseekApiKey', 'grokApiKey', 'qwenApiKey', 'kimiApiKey']
+    .some((k) => !!cfg.get<string>(k, ''));
+  if (!hasAnyKey && !context.globalState.get<boolean>('tpt.wizardDismissed')) {
+    vscode.window.showInformationMessage(
+      'Welcome to TPT Code Command Center! Set up your API key to get started.',
+      'Run Setup Wizard', 'Later'
+    ).then((choice) => {
+      if (choice === 'Run Setup Wizard') {
+        runSetupWizard(context);
+      } else {
+        context.globalState.update('tpt.wizardDismissed', true);
+      }
+    });
+  }
+
+  // Keep status bar updated on config changes; restart quota polling when provider/key changes
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('tpt')) {
         updateStatusBar();
         refreshDashboard();
+        stopQuotaPolling();
+        startQuotaPolling(getConfig());
       }
     })
   );
@@ -65,6 +140,51 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     vscode.commands.registerCommand('tpt.configureModels', () => showModelPicker()),
 
+    vscode.commands.registerCommand('tpt.inspectLast', () => {
+      const snapshot = getLastInspectSnapshot();
+      if (!snapshot) {
+        vscode.window.showInformationMessage('TPT: No request has been proxied yet.');
+        return;
+      }
+      const channel = getChannel();
+      channel.show(true);
+      const date = new Date(snapshot.timestamp).toLocaleString();
+      channel.appendLine('\n─── TPT Inspect ─────────────────────────────────────────────');
+      channel.appendLine(`Time: ${date}  Format: ${snapshot.format}  Cache hit: ${snapshot.cacheHit}`);
+      channel.appendLine(`Module actions: ${snapshot.moduleActions.join(', ') || '(none)'}`);
+      if (snapshot.overrideUpstream) {
+        const u = snapshot.overrideUpstream;
+        channel.appendLine(`Router override: ${u.model ?? '(same)'} @ ${u.baseUrl}`);
+      }
+      channel.appendLine('\n── Processed body sent to upstream ──');
+      channel.appendLine(JSON.stringify(snapshot.processedBody, null, 2));
+      channel.appendLine('─────────────────────────────────────────────────────────────\n');
+    }),
+
+    vscode.commands.registerCommand('tpt.showPromptDiff', () => showPromptDiff(context)),
+
+    vscode.commands.registerCommand('tpt.exportLedger', async () => {
+      const uri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file(path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '', 'tpt-ledger.csv')),
+        filters: { 'CSV files': ['csv'], 'All files': ['*'] },
+        saveLabel: 'Export Ledger',
+      });
+      if (!uri) return;
+      const csv = await exportLedgerCsv();
+      fs.writeFileSync(uri.fsPath, csv, 'utf8');
+      vscode.window.showInformationMessage(`TPT: Ledger exported to ${uri.fsPath}`);
+    }),
+
+    vscode.commands.registerCommand('tpt.configureCline', () => {
+      const url = getProxyUrl();
+      const token = getSessionToken();
+      if (!url || !token) {
+        vscode.window.showWarningMessage('TPT proxy is not running yet.');
+        return;
+      }
+      configureClineAuto(url, token);
+    }),
+
     vscode.commands.registerCommand('tpt.copyProxyUrl', async () => {
       const url = getProxyUrl();
       if (url) {
@@ -75,6 +195,51 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } else {
         vscode.window.showWarningMessage('TPT proxy is not running yet.');
       }
+    }),
+
+    vscode.commands.registerCommand('tpt.runSetupWizard', () => runSetupWizard(context)),
+
+    vscode.commands.registerCommand('tpt.exportMonthlySummary', async () => {
+      const [monthlyStats, stats] = await Promise.all([getMonthlyStats(12), getStats()]);
+      const header = 'Month,Requests,Tokens In,Tokens Out,Cost USD,Cache Hits,Saved USD,Tokens Saved\n';
+      const lines = monthlyStats.map((m) =>
+        [m.month, m.cacheHits + (stats.totalRequests / Math.max(monthlyStats.length, 1)) | 0,
+         m.tokensIn, m.tokensOut, m.costUsd.toFixed(8), m.cacheHits, m.savedUsd.toFixed(8), m.tokensSaved].join(',')
+      );
+      const csv = header + lines.join('\n');
+      const monthTag = new Date().toISOString().slice(0, 7);
+      const downloadsDir = path.join(os.homedir(), 'Downloads');
+      const outDir = fs.existsSync(downloadsDir) ? downloadsDir : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.tmpdir());
+      const outPath = path.join(outDir, `tpt-summary-${monthTag}.csv`);
+      fs.writeFileSync(outPath, csv, 'utf8');
+      vscode.window.showInformationMessage(`TPT: Monthly summary exported to ${outPath}`, 'Open File').then((choice) => {
+        if (choice === 'Open File') vscode.env.openExternal(vscode.Uri.file(outPath));
+      });
+    }),
+
+    vscode.commands.registerCommand('tpt.resetSetup', async () => {
+      const confirm = await vscode.window.showWarningMessage(
+        'Clear all TPT API keys and reset provider to OpenRouter?',
+        { modal: true },
+        'Yes, reset'
+      );
+      if (confirm !== 'Yes, reset') return;
+      const c = vscode.workspace.getConfiguration('tpt');
+      const target = vscode.ConfigurationTarget.Workspace;
+      await Promise.all([
+        c.update('openrouterApiKey', '', target),
+        c.update('anthropicApiKey', '', target),
+        c.update('openaiApiKey', '', target),
+        c.update('deepseekApiKey', '', target),
+        c.update('qwenApiKey', '', target),
+        c.update('kimiApiKey', '', target),
+        c.update('grokApiKey', '', target),
+        c.update('customApiKey', '', target),
+        c.update('customBaseUrl', '', target),
+        c.update('upstreamProvider', 'openrouter', target),
+      ]);
+      context.globalState.update('tpt.wizardDismissed', false);
+      vscode.window.showInformationMessage('TPT: Configuration reset. Run the Setup Wizard to reconfigure.');
     }),
   );
 
@@ -97,6 +262,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 export function deactivate(): void {
   stopProxyServer();
+  stopQuotaPolling();
   disposeDashboard();
   disposeStatusBar();
   disposeChannel();

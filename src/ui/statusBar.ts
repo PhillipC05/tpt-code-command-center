@@ -1,14 +1,30 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../utils/config';
-import { getProxyUrl } from '../proxy/server';
+import { getProxyUrl, getServerState } from '../proxy/server';
+import { getStats, getTodayCostUsd } from '../ledger/ledger';
 
 let statusBarItem: vscode.StatusBarItem | undefined;
+let tickerInterval: NodeJS.Timeout | undefined;
+let todayCostLine = '';
+
+async function refreshCostTicker(): Promise<void> {
+  try {
+    const [cost, stats] = await Promise.all([getTodayCostUsd(), getStats()]);
+    todayCostLine = `Today: $${cost.toFixed(4)} | ${stats.totalRequests} total requests`;
+  } catch {
+    // ledger may not be ready yet — leave previous value
+  }
+  updateStatusBar();
+}
 
 export function createStatusBar(): vscode.StatusBarItem {
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.command = 'tpt.toggleSuite';
   updateStatusBar();
   statusBarItem.show();
+  // Kick off initial cost fetch and refresh every 60 seconds
+  refreshCostTicker();
+  tickerInterval = setInterval(refreshCostTicker, 60_000);
   return statusBarItem;
 }
 
@@ -16,11 +32,26 @@ export function updateStatusBar(): void {
   if (!statusBarItem) return;
   const config = getConfig();
   const proxyUrl = getProxyUrl();
+  const { state, error } = getServerState();
+
+  if (state === 'starting') {
+    statusBarItem.text = '$(loading~spin) TPT';
+    statusBarItem.color = undefined;
+    statusBarItem.tooltip = 'TPT: proxy starting…';
+    return;
+  }
+
+  if (state === 'error') {
+    statusBarItem.text = '$(error) TPT';
+    statusBarItem.color = new vscode.ThemeColor('statusBarItem.errorBackground');
+    statusBarItem.tooltip = `TPT: proxy failed to start — ${error ?? 'unknown error'}\nClick to see Output Channel`;
+    return;
+  }
 
   if (!config.enabled) {
     statusBarItem.text = '$(shield) TPT';
     statusBarItem.color = new vscode.ThemeColor('statusBarItem.errorBackground');
-    statusBarItem.tooltip = `TPT bypassed — proxy at ${proxyUrl ?? 'not running'}\nClick to re-enable`;
+    statusBarItem.tooltip = `TPT bypassed — proxy at ${proxyUrl}\nClick to re-enable`;
     return;
   }
 
@@ -35,18 +66,19 @@ export function updateStatusBar(): void {
   const activeCount = modules.filter(Boolean).length;
   const totalCount = modules.length;
 
+  const costSuffix = todayCostLine ? `\n${todayCostLine}` : '';
   if (activeCount === totalCount) {
     statusBarItem.text = '$(shield) TPT';
     statusBarItem.color = new vscode.ThemeColor('charts.green');
-    statusBarItem.tooltip = `TPT active — all ${totalCount} modules on\nProxy: ${proxyUrl ?? 'starting...'}\nClick to manage`;
+    statusBarItem.tooltip = `TPT active — all ${totalCount} modules on\nProxy: ${proxyUrl}${costSuffix}\nClick to manage`;
   } else if (activeCount > 0) {
     statusBarItem.text = `$(shield) TPT (${activeCount}/${totalCount})`;
     statusBarItem.color = new vscode.ThemeColor('charts.yellow');
-    statusBarItem.tooltip = `TPT partial — ${activeCount} of ${totalCount} modules active\nProxy: ${proxyUrl ?? 'starting...'}\nClick to manage`;
+    statusBarItem.tooltip = `TPT partial — ${activeCount} of ${totalCount} modules active\nProxy: ${proxyUrl}${costSuffix}\nClick to manage`;
   } else {
     statusBarItem.text = '$(shield) TPT';
     statusBarItem.color = new vscode.ThemeColor('errorForeground');
-    statusBarItem.tooltip = `TPT: all modules disabled\nProxy: ${proxyUrl ?? 'not running'}\nClick to manage`;
+    statusBarItem.tooltip = `TPT: all modules disabled\nProxy: ${proxyUrl}${costSuffix}\nClick to manage`;
   }
 }
 
@@ -100,6 +132,18 @@ export async function showToggleMenu(): Promise<void> {
       label: '$(graph) Show dashboard',
       description: 'Open token stats',
     },
+    {
+      label: '$(gear) Run setup wizard',
+      description: 'Configure provider and API key',
+    },
+    {
+      label: '$(trash) Reset credentials',
+      description: 'Clear all API keys and reset provider',
+    },
+    {
+      label: '$(cloud-download) Export monthly summary',
+      description: 'Save CSV to Downloads folder',
+    },
   ];
 
   const picked = await vscode.window.showQuickPick(items, {
@@ -130,12 +174,19 @@ export async function showToggleMenu(): Promise<void> {
     vscode.window.showInformationMessage(`Copied: ${proxyUrl}`);
   } else if (picked.label.includes('Show dashboard')) {
     vscode.commands.executeCommand('tpt.showDashboard');
+  } else if (picked.label.includes('setup wizard')) {
+    vscode.commands.executeCommand('tpt.runSetupWizard');
+  } else if (picked.label.includes('Reset credentials')) {
+    vscode.commands.executeCommand('tpt.resetSetup');
+  } else if (picked.label.includes('monthly summary')) {
+    vscode.commands.executeCommand('tpt.exportMonthlySummary');
   }
 
   updateStatusBar();
 }
 
 export function disposeStatusBar(): void {
+  if (tickerInterval) { clearInterval(tickerInterval); tickerInterval = undefined; }
   statusBarItem?.dispose();
   statusBarItem = undefined;
 }
