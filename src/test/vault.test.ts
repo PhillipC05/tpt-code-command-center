@@ -29,7 +29,7 @@ test('redacts Stripe live secret key', () => {
   assert.ok(result.redacted >= 1);
 });
 
-test('redacts GitHub PAT (ghp_...)', () => {
+test('redacts GitHub PAT (classic format)', () => {
   const result = runVault(makeBody(EX_GH_PAT), []);
   assert.ok(result.redacted >= 1);
 });
