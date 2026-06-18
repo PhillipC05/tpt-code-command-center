@@ -1,0 +1,43 @@
+1. The Architecture: The "Extension-Hosted Local Proxy"
+Instead of building a separate app, your VS Code extension will act as the brain. When the user opens VS Code, the TPT extension will automatically spin up a lightweight, local HTTP server (e.g., on localhost:7331) in the background.
+You will configure Cline and Claude Code to point their custom API endpoints to http://localhost:7331.
+When the AI tools make an API call, the TPT extension intercepts it, runs it through the local optimization pipeline, and forwards it to the actual LLM provider. When VS Code closes, the local server shuts down cleanly. No background processes, no Docker containers, no hosted servers.
+2. The UI/UX: The "TPT Cockpit"
+Since we are skipping the web frontend, we will build the TPT Cockpit natively inside VS Code using its built-in UI paradigms. This ensures the tool feels like a premium, native part of the IDE.
+The Status Bar (Quick Toggles): A small TPT icon in the bottom right of VS Code. Clicking it opens a quick-pick menu to instantly toggle the entire suite On/Off, or toggle individual modules (e.g., "Disable Silent Edit for this session"). The icon changes color (Green = All On, Yellow = Partial, Red = Bypassed).
+The Activity Bar Sidebar (The Dashboard): A dedicated TPT icon on the left sidebar. Clicking it opens a VS Code WebView (which renders locally, requiring no web hosting). This panel will display your Token Ledger (tokens saved, money saved), a live log of the proxy pipeline, and a visual map of your active toggles.
+The Command Palette: Every single function will be accessible via Ctrl+Shift+P (e.g., TPT: Force Memory Weaver Prune, TPT: Clear Local Cache, TPT: Show Token Stats).
+3. Adapting the 8 Modules for a Local-Only VS Code Extension
+Here is how we adapt the TPT suite to run entirely locally within the extension, with every function strictly toggleable via VS Code settings.json.
+A. TPT Smart Context (Local AST Engine)
+How it works locally: Instead of a separate MCP server, the extension uses the web-tree-sitter WASM module directly in the Node.js extension host. When Cline requests a file read, the extension intercepts it, parses the file locally using Tree-sitter, and returns only the outline.
+Toggle: tpt.smartContext.enabled (Boolean). You can also add tpt.smartContext.maxFileSize to ignore massive files.
+B. TPT Token Shield (Local Semantic Cache)
+How it works locally: The extension bundles a local SQLite database (using better-sqlite3) and a lightweight local embedding model (like transformers.js running in the extension host). It caches prompts and embeddings locally on the user's hard drive.
+Toggle: tpt.tokenShield.enabled (Boolean), and tpt.tokenShield.maxCacheSizeMB (Integer) to prevent it from eating up the user's hard drive.
+C. TPT Silent Edit (Native Workspace Edits)
+How it works locally: This is where the VS Code extension shines. Instead of parsing JSON and applying it via a hacky script, the extension uses the native VS Code WorkspaceEdit API. The AI outputs strict JSON, the extension parses it, and applies it as a native, undoable diff in the editor.
+Toggle: tpt.silentEdit.enabled (Boolean). If turned off, the AI reverts to its normal, chatty markdown output.
+D. TPT Memory Weaver (Local State Management)
+How it works locally: The extension monitors the conversation history size. When it hits the threshold, it uses a cheap, local model (via Ollama, if the user has it, or a very cheap API call) to summarize the history. It saves the "Working Memory" to a local .tpt/memory.json file in the workspace root.
+Toggle: tpt.memoryWeaver.enabled (Boolean), and tpt.memoryWeaver.tokenThreshold (Integer).
+E. TPT Vault (Local Security Redaction)
+How it works locally: The extension runs high-speed Regex patterns (bundled directly in the code) to detect AWS keys, Stripe tokens, etc. For advanced PII, it can optionally use a local ONNX model, but Regex is usually enough for 95% of secrets. It redacts in memory before sending to the API.
+Toggle: tpt.vault.enabled (Boolean). You can also add tpt.vault.customRegex (Array of strings) so users can add their own internal company secret patterns.
+F. TPT Router (Local Heuristics)
+How it works locally: Since we want no hosting, the Router will use zero-cost local heuristics. It analyzes the prompt length, the presence of specific keywords, and the file extensions. Based on a user-defined routing table in settings.json, it rewrites the target API URL and API key on the fly.
+Toggle: tpt.router.enabled (Boolean).
+G. TPT Forge (GitHub-Backed Local Registry)
+How it works locally (No Hosting): Since you don't want to host a web registry, TPT Forge will simply pull raw JSON configuration files directly from a public GitHub Repository that you maintain. When a user wants to install a community prompt or AST parser, the extension fetches the raw JSON from GitHub and saves it to their local .tpt/ folder. No backend server required.
+Toggle: tpt.forge.autoUpdate (Boolean).
+H. TPT Terminal (Integrated Output Channel)
+How it works locally: Instead of building a separate TUI, the extension will utilize the native VS Code Output Channel and Integrated Terminal. Users can type tpt commands directly into the VS Code terminal, which the extension intercepts, or they can view the live proxy logs in the "TPT Command Center" Output tab.
+Toggle: tpt.terminal.verboseLogging (Boolean).
+My Recommendation for Your Next Steps
+Building a comprehensive VS Code extension with a local proxy is a highly achievable and incredibly valuable project. Here is your exact roadmap to start building the TPT Code Command Center today:
+Scaffold the Extension: Use yo code (Yeoman) to generate a basic TypeScript VS Code extension.
+Build the Local Proxy: Inside the extension's activate() function, use the native Node.js http module or a lightweight library like express to spin up a local server on port 7331. Make it simply pass through requests to Anthropic/OpenAI to prove the concept.
+Implement the Status Bar & Toggles: Add the TPT status bar item. Wire it up to VS Code's workspace.getConfiguration() API so that clicking the buttons actually updates the user's settings.json.
+Add the Token Ledger: Before the proxy forwards a request, use a library like js-tiktoken to count the tokens. Save this data to a local SQLite database. Build the WebView sidebar to display this data.
+Plug in the Modules: Once the proxy, UI, and toggles are working, start adding the modules one by one. Start with TPT Vault (Regex redaction) because it's the easiest to implement locally and provides immediate, visible value. Then move to Smart Context (Tree-sitter).
+By keeping it strictly inside VS Code, strictly local, and strictly toggleable, you are building a tool that respects the developer's environment, requires zero DevOps to install, and perfectly aligns with the Apache 2.0 open-source ethos.
