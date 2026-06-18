@@ -11,7 +11,7 @@ import { handleSilentEditResponse, handleSilentEditStreamResponse } from '../mod
 import { AnthropicRequest, OpenAIRequest, ProxyRequest } from './types';
 import { countTokens, getTodayCostUsd, getThisMonthCostUsd } from '../ledger/ledger';
 import { getCostUsd, initPricing } from '../ledger/pricing';
-import { captureRateLimitHeaders } from '../modules/quotaTracker';
+import { captureRateLimitHeaders, recordActivity } from '../modules/quotaTracker';
 
 const PREFERRED_PORT = 7331;
 
@@ -293,6 +293,9 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
         'Run "TPT: Copy Proxy URL to Clipboard" to get your session token.');
       return;
     }
+
+    // Mark activity so quota polling knows the user is working
+    recordActivity();
 
     // Hard budget stop — block request before any processing
     if (config.enabled && config.costBudget.hardStop) {

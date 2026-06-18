@@ -18,12 +18,21 @@ export interface QuotaSnapshot {
 let snapshot: QuotaSnapshot | undefined;
 let pollTimer: NodeJS.Timeout | undefined;
 
+// Idle detection: skip balance API calls when no proxy traffic for this long
+const IDLE_THRESHOLD_MS = 5 * 60 * 1000;
+let lastActivityTs = 0;
+
+export function recordActivity(): void {
+  lastActivityTs = Date.now();
+}
+
 export function getQuotaSnapshot(): QuotaSnapshot | undefined {
   return snapshot;
 }
 
 // Called after every proxied response to capture rate-limit headers passively
 export function captureRateLimitHeaders(headers: Record<string, string>): void {
+  recordActivity(); // any forwarded response means the user is actively working
   const tokensRemaining =
     headers['anthropic-ratelimit-tokens-remaining'] ??
     headers['x-ratelimit-remaining-tokens'];
@@ -47,21 +56,31 @@ export function captureRateLimitHeaders(headers: Record<string, string>): void {
 
 export function startQuotaPolling(config: TptConfig): void {
   stopQuotaPolling();
-  const intervalSec = config.costBudget.quotaPollingIntervalSec;
-  if (intervalSec <= 0) return;
+  const intervalMs = config.costBudget.quotaPollingIntervalSec * 1000;
+  if (intervalMs <= 0) return;
 
   // Set provider immediately so passive capture has context
   snapshot = snapshot
     ? { ...snapshot, provider: config.upstreamProvider }
     : { provider: config.upstreamProvider, lastUpdated: 0 };
 
-  const poll = () => fetchBalance(config);
-  poll(); // fetch once immediately on start
-  pollTimer = setInterval(poll, intervalSec * 1000);
+  // Treat startup as activity so the first poll always fires
+  recordActivity();
+
+  const tick = async () => {
+    // Only hit the balance API when there has been recent proxy traffic
+    if (Date.now() - lastActivityTs < IDLE_THRESHOLD_MS) {
+      await fetchBalance(config);
+    }
+    // Always reschedule — resumes fetching automatically when activity returns
+    pollTimer = setTimeout(tick, intervalMs);
+  };
+
+  tick();
 }
 
 export function stopQuotaPolling(): void {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = undefined; }
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = undefined; }
 }
 
 async function fetchBalance(config: TptConfig): Promise<void> {
