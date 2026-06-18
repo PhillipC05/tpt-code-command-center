@@ -1,0 +1,242 @@
+{
+  "name": "tpt-code-command-center",
+  "displayName": "TPT Code Command Center",
+  "description": "Local AI token optimization proxy — intercepts, redacts, caches, and routes LLM traffic from Cline, Claude Code, and any OpenAI-compatible client.",
+  "version": "0.1.0",
+  "publisher": "tpt",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Machine Learning"
+  ],
+  "keywords": [
+    "ai",
+    "llm",
+    "tokens",
+    "claude",
+    "cline",
+    "openai",
+    "proxy",
+    "cost"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tpt/code-command-center"
+  },
+  "contributes": {
+    "configuration": {
+      "title": "TPT Code Command Center",
+      "properties": {
+        "tpt.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Master switch — enable or disable the entire TPT proxy pipeline."
+        },
+        "tpt.upstreamProvider": {
+          "type": "string",
+          "enum": [
+            "openrouter",
+            "anthropic",
+            "openai",
+            "local",
+            "custom"
+          ],
+          "default": "openrouter",
+          "description": "Default upstream provider for all LLM requests."
+        },
+        "tpt.openrouterApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenRouter API key."
+        },
+        "tpt.anthropicApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Anthropic API key for direct routing."
+        },
+        "tpt.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key for direct routing."
+        },
+        "tpt.localBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:11434/v1",
+          "description": "Base URL for local model server (Ollama, LM Studio, etc)."
+        },
+        "tpt.customBaseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Custom upstream base URL."
+        },
+        "tpt.customApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for custom upstream."
+        },
+        "tpt.vault.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "TPT Vault — redact secrets and PII before sending to any LLM."
+        },
+        "tpt.vault.customRegex": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional regex patterns to redact (e.g. internal API key formats)."
+        },
+        "tpt.smartContext.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "TPT Smart Context — replace full file content with AST outlines in tool calls."
+        },
+        "tpt.smartContext.maxFileSize": {
+          "type": "number",
+          "default": 512000,
+          "description": "Max file size in bytes to process with Smart Context (default 500KB)."
+        },
+        "tpt.tokenShield.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "TPT Token Shield — cache identical prompts locally to skip upstream calls."
+        },
+        "tpt.tokenShield.maxCacheSizeMB": {
+          "type": "number",
+          "default": 256,
+          "description": "Maximum size of the local prompt cache in MB."
+        },
+        "tpt.memoryWeaver.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "TPT Memory Weaver — summarise conversation history when it exceeds the token threshold."
+        },
+        "tpt.memoryWeaver.tokenThreshold": {
+          "type": "number",
+          "default": 50000,
+          "description": "Token count in the messages array that triggers summarisation."
+        },
+        "tpt.memoryWeaver.fallbackOrder": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "ollama",
+              "proxy",
+              "extractive"
+            ]
+          },
+          "default": [
+            "ollama",
+            "proxy",
+            "extractive"
+          ],
+          "description": "Order of summarisation backends to try. 'ollama' = local Ollama, 'proxy' = route through configured LLM, 'extractive' = drop oldest messages."
+        },
+        "tpt.router.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "TPT Router — rewrite model and provider based on heuristic rules."
+        },
+        "tpt.router.rules": {
+          "type": "array",
+          "default": [],
+          "description": "Routing rules array. Each rule: { match: { maxTokens?, keywords?, extensions? }, model: string, provider: string }."
+        },
+        "tpt.silentEdit.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "TPT Silent Edit — intercept AI JSON edit instructions and apply as native VS Code diffs."
+        },
+        "tpt.forge.autoUpdate": {
+          "type": "boolean",
+          "default": true,
+          "description": "TPT Forge — automatically check for updated community configs from GitHub."
+        },
+        "tpt.terminal.verboseLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "TPT Terminal — show detailed per-request pipeline logs in the Output Channel."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "tpt.toggleSuite",
+        "title": "TPT: Toggle Entire Suite On/Off"
+      },
+      {
+        "command": "tpt.showStats",
+        "title": "TPT: Show Token Stats"
+      },
+      {
+        "command": "tpt.clearCache",
+        "title": "TPT: Clear Local Cache"
+      },
+      {
+        "command": "tpt.pruneMemory",
+        "title": "TPT: Force Memory Weaver Prune"
+      },
+      {
+        "command": "tpt.browseForge",
+        "title": "TPT: Browse Forge"
+      },
+      {
+        "command": "tpt.showDashboard",
+        "title": "TPT: Show Dashboard"
+      },
+      {
+        "command": "tpt.copyProxyUrl",
+        "title": "TPT: Copy Proxy URL to Clipboard"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tpt-sidebar",
+          "title": "TPT Command Center",
+          "icon": "media/sidebar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "tpt-sidebar": [
+        {
+          "type": "webview",
+          "id": "tpt.dashboard",
+          "name": "Dashboard"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/sql.js": "^1.4.11",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "js-tiktoken": "^1.0.12",
+    "sql.js": "^1.12.0",
+    "web-tree-sitter": "^0.26.9"
+  }
+}
