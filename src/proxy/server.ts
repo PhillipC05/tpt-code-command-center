@@ -497,10 +497,24 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
 
   await new Promise<void>((resolve, reject) => {
     server!.once('error', (err: NodeJS.ErrnoException) => {
-      serverState = 'error';
-      serverError = err.message;
-      activePort = undefined;
-      reject(err);
+      if (err.code === 'EADDRINUSE') {
+        // Port was free during probe but taken before listen — try next port
+        server!.close();
+        findFreePort(port + 1).then((nextPort) => {
+          activePort = nextPort;
+          server!.listen(nextPort, '127.0.0.1', () => {
+            serverState = 'running';
+            log(`TPT proxy listening on http://localhost:${nextPort}`);
+            vscode.commands.executeCommand('setContext', 'tpt.proxyActive', true);
+            resolve();
+          });
+        }, reject);
+      } else {
+        serverState = 'error';
+        serverError = err.message;
+        activePort = undefined;
+        reject(err);
+      }
     });
     server!.listen(port, '127.0.0.1', () => {
       serverState = 'running';

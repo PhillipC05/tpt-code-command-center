@@ -2,3 +2,6 @@ out/
 node_modules/
 *.vsix
 .tpt/
+
+# TPT Code Command Center — contains API keys and session token
+.vscode/settings.json

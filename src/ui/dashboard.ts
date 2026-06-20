@@ -24,7 +24,10 @@ export function showDashboard(context: vscode.ExtensionContext): void {
   );
 
   panel.onDidDispose(() => { panel = undefined; }, undefined, context.subscriptions);
-  refreshDashboard();
+  refreshDashboard().catch((err) => {
+    const logger = require('../utils/logger');
+    logger.log(`Dashboard render error: ${err}`);
+  });
 }
 
 export async function refreshDashboard(): Promise<void> {

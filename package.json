@@ -276,7 +276,7 @@
           "type": "number",
           "default": 0.92,
           "minimum": 0.5,
-          "maximum": 1.0,
+          "maximum": 1,
           "description": "Cosine similarity threshold for semantic cache hits (0–1). Higher values require closer matches. Default 0.92."
         },
         "tpt.tokenShield.semanticCache.ollamaModel": {
@@ -385,8 +385,8 @@
     "@types/node": "^20.0.0",
     "@types/sql.js": "^1.4.11",
     "@types/vscode": "^1.85.0",
-    "@typescript-eslint/eslint-plugin": "^6.0.0",
-    "@typescript-eslint/parser": "^6.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.61.1",
+    "@typescript-eslint/parser": "^8.61.1",
     "@vscode/vsce": "^3.9.2",
     "eslint": "^8.0.0",
     "typescript": "^5.3.0"
