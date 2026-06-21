@@ -8,6 +8,12 @@ import type { Database } from 'sql.js';
 let initSqlJs: (config?: any) => Promise<any>;
 let db: Database | undefined;
 
+let _onRecord: (() => void) | undefined;
+export function setOnRecordHook(fn: () => void): void { _onRecord = fn; }
+
+let _storageUri: string | undefined;
+export function setStoragePath(uri: string): void { _storageUri = uri; }
+
 async function getDb(): Promise<Database> {
   if (db) return db;
 
@@ -50,10 +56,16 @@ async function getDb(): Promise<Database> {
 
 function getTptDir(): string | undefined {
   const folders = vscode.workspace.workspaceFolders;
-  if (!folders?.length) return undefined;
-  const dir = path.join(folders[0].uri.fsPath, '.tpt');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  if (folders?.length) {
+    const dir = path.join(folders[0].uri.fsPath, '.tpt');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+  if (_storageUri) {
+    if (!fs.existsSync(_storageUri)) fs.mkdirSync(_storageUri, { recursive: true });
+    return _storageUri;
+  }
+  return undefined;
 }
 
 function persistDb(): void {
@@ -81,6 +93,7 @@ export async function recordRequest(entry: LedgerEntry): Promise<void> {
     [Date.now(), entry.model, entry.tokensIn, entry.tokensOut, entry.costUsd, entry.cacheHit ? 1 : 0, entry.moduleActions.join(',')]
   );
   persistDb();
+  _onRecord?.();
 }
 
 export interface LedgerStats {

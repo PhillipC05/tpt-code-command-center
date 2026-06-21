@@ -5,7 +5,7 @@ import { startProxyServer, stopProxyServer, getProxyUrl, getSessionToken } from 
 import { createStatusBar, updateStatusBar, showToggleMenu, disposeStatusBar } from './ui/statusBar';
 import { showDashboard, refreshDashboard, disposeDashboard } from './ui/dashboard';
 import * as os from 'os';
-import { getStats, clearLedger, exportLedgerCsv, getMonthlyStats } from './ledger/ledger';
+import { getStats, clearLedger, exportLedgerCsv, getMonthlyStats, setStoragePath, setOnRecordHook } from './ledger/ledger';
 import { startQuotaPolling, stopQuotaPolling } from './modules/quotaTracker';
 import { clearCache } from './modules/tokenShield';
 import { browseForge } from './modules/forge';
@@ -50,6 +50,9 @@ function checkGitignore(context: vscode.ExtensionContext): void {
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   log('TPT Code Command Center activating...');
 
+  // Persist ledger data even when no workspace folder is open
+  setStoragePath(context.globalStorageUri.fsPath);
+
   // Point Smart Context at the bundled WASM files shipped inside the extension
   const wasmDir = require('path').join(context.extensionPath, 'media', 'wasm');
   setWasmDir(wasmDir);
@@ -66,6 +69,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await startProxyServer(context);
     updateStatusBar();
     startQuotaPolling(getConfig());
+    setOnRecordHook(() => {
+      refreshDashboard();
+      updateStatusBar();
+    });
   } catch (err) {
     updateStatusBar();
     const msg = err instanceof Error ? err.message : String(err);

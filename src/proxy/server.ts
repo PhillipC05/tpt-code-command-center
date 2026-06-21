@@ -423,16 +423,16 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
           req.url ?? '/', req.method ?? 'POST',
           req.headers, outBody, format, config.upstreamProvider, res
         );
+        const tokensOut = estimateStreamingTokensOut(accumulated, format);
+        await recordRequest({
+          model: (pipelineResult.body as AnthropicRequest).model ?? 'unknown',
+          tokensIn,
+          tokensOut,
+          costUsd: status === 200 ? getCostUsd((pipelineResult.body as AnthropicRequest).model ?? '', tokensIn, tokensOut) : 0,
+          moduleActions: pipelineResult.moduleActions,
+          cacheHit: false,
+        });
         if (status === 200) {
-          const tokensOut = estimateStreamingTokensOut(accumulated, format);
-          await recordRequest({
-            model: (pipelineResult.body as AnthropicRequest).model ?? 'unknown',
-            tokensIn,
-            tokensOut,
-            costUsd: getCostUsd((pipelineResult.body as AnthropicRequest).model ?? '', tokensIn, tokensOut),
-            moduleActions: pipelineResult.moduleActions,
-            cacheHit: false,
-          });
           if (config.silentEdit.enabled) {
             await handleSilentEditStreamResponse(accumulated, format);
           }
