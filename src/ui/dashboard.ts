@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { getStats, getModelBreakdown, getMonthlyStats, LedgerStats, ModelStat, MonthStat } from '../ledger/ledger';
 import { getProxyUrl } from '../proxy/server';
-import { getConfig } from '../utils/config';
+import { getConfig, resolveUpstreamUrl } from '../utils/config';
 import { getQuotaSnapshot, QuotaSnapshot } from '../modules/quotaTracker';
 
 let panel: vscode.WebviewPanel | undefined;
@@ -20,6 +20,7 @@ export function showDashboard(context: vscode.ExtensionContext): void {
       enableScripts: true,
       retainContextWhenHidden: true,
       localResourceRoots: [],
+      enableCommandUris: true,
     }
   );
 
@@ -143,6 +144,14 @@ function buildHtml(
     .quota-label { color: var(--vscode-descriptionForeground); }
     .quota-val { font-weight: bold; }
     .quota-ts { font-size: 10px; color: var(--vscode-descriptionForeground); margin-top: 6px; }
+    .setup-guide { background: var(--vscode-input-background); border: 1px solid var(--vscode-editorWarning-foreground); border-radius: 6px; padding: 14px 16px; margin-bottom: 16px; }
+    .setup-guide h3 { margin: 0 0 10px; font-size: 13px; color: var(--vscode-editorWarning-foreground); }
+    .step { display: flex; gap: 10px; margin-bottom: 8px; font-size: 12px; line-height: 1.5; }
+    .step-icon { flex-shrink: 0; width: 18px; }
+    .step-ok { color: #4caf50; }
+    .step-err { color: var(--vscode-editorWarning-foreground); }
+    .step code { background: var(--vscode-textCodeBlock-background); padding: 0 4px; border-radius: 2px; font-size: 11px; }
+    .step a { color: var(--vscode-textLink-foreground); }
   </style>
 </head>
 <body>
@@ -153,6 +162,8 @@ function buildHtml(
     &nbsp;|&nbsp; Suite: <span class="${config.enabled ? 'badge-on' : 'badge-off'}">${config.enabled ? 'ACTIVE' : 'BYPASSED'}</span>
     &nbsp;|&nbsp; This month: <strong>$${thisMonthSpend.toFixed(4)}</strong>
   </div>
+
+  ${stats.totalRequests === 0 ? buildSetupGuideHtml(config, proxyUrl) : ''}
 
   <div class="savings-hero">
     <div class="savings-hero-title">✦ Estimated savings from TPT optimisation</div>
@@ -237,6 +248,41 @@ function buildHtml(
   </table>
 </body>
 </html>`;
+}
+
+function buildSetupGuideHtml(
+  config: ReturnType<typeof getConfig>,
+  proxyUrl: string | undefined,
+): string {
+  const { apiKey } = resolveUpstreamUrl(config);
+  const apiKeyOk = config.upstreamProvider === 'local' || apiKey.length > 0;
+  const proxyOk = proxyUrl !== undefined;
+
+  const apiKeyStep = apiKeyOk
+    ? `<div class="step"><span class="step-icon step-ok">✅</span><span>API key configured for <code>${config.upstreamProvider}</code></span></div>`
+    : `<div class="step"><span class="step-icon step-err">❌</span><span>No API key set for <code>${config.upstreamProvider}</code>. <a href="command:workbench.action.openSettings?%5B%22tpt%22%5D">Open Settings</a> and set <code>tpt.${config.upstreamProvider}ApiKey</code> (or change <code>tpt.upstreamProvider</code>).</span></div>`;
+
+  const proxyStep = proxyOk
+    ? `<div class="step"><span class="step-icon step-ok">✅</span><span>Proxy is running at <code>${proxyUrl}</code></span></div>`
+    : `<div class="step"><span class="step-icon step-err">⚠️</span><span>Proxy is still starting. Check the <strong>TPT Command Center</strong> Output Channel for errors.</span></div>`;
+
+  const url = proxyUrl ?? 'http://localhost:7331';
+
+  return `<div class="setup-guide">
+  <h3>⚡ Getting Started — no requests recorded yet</h3>
+  ${apiKeyStep}
+  ${proxyStep}
+  <div class="step"><span class="step-icon">3️⃣</span><span>
+    <strong>Connect your AI tool:</strong><br>
+    <strong>Claude Code VS Code extension</strong> — in VS Code settings (<code>Ctrl+,</code>), search <code>claude apiBaseUrl</code> and set it to <code>${url}</code>. All requests flow: Claude Code → TPT proxy → Anthropic.<br>
+    <strong>Claude Code CLI</strong> — open a <em>new</em> terminal inside VS Code (<code>ANTHROPIC_BASE_URL=${url}</code> is auto-injected) and run <code>claude</code> as normal.<br>
+    <strong>Cline</strong> — Provider: <code>OpenAI Compatible</code> · Base URL: <code>${url}</code> · Add header: <code>X-TPT-Token: &lt;token from Output Channel&gt;</code>
+  </span></div>
+  <div class="step"><span class="step-icon">4️⃣</span><span>Send any message through your AI tool — this panel updates automatically.</span></div>
+  <div class="step"><span class="step-icon">💡</span><span>
+    <strong>Note on savings:</strong> Token savings and cost reduction are most impactful when using a pay-per-token API key (OpenRouter, Anthropic API, etc.). If you are on a Claude Pro/Max subscription, vault redaction and caching still work, but the cost savings shown here may not reflect your actual subscription spend.
+  </span></div>
+</div>`;
 }
 
 function buildQuotaHtml(quota: QuotaSnapshot | undefined, provider: string): string {
