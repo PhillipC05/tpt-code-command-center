@@ -62,6 +62,7 @@ export function updateStatusBar(): void {
     config.memoryWeaver.enabled,
     config.router.enabled,
     config.silentEdit.enabled,
+    config.promptCache.enabled,
   ];
   const activeCount = modules.filter(Boolean).length;
   const totalCount = modules.length;
@@ -123,6 +124,11 @@ export async function showToggleMenu(): Promise<void> {
       description: config.silentEdit.enabled ? 'ON — JSON diffs' : 'OFF',
       picked: config.silentEdit.enabled,
     },
+    {
+      label: `$(archive) Prompt Cache`,
+      description: config.promptCache.enabled ? 'ON — Anthropic cache_control breakpoints' : 'OFF',
+      picked: config.promptCache.enabled,
+    },
     { label: '', kind: vscode.QuickPickItemKind.Separator },
     {
       label: '$(link) Copy proxy URL',
@@ -169,6 +175,8 @@ export async function showToggleMenu(): Promise<void> {
     await cfg.update('router.enabled', !config.router.enabled, vscode.ConfigurationTarget.Workspace);
   } else if (picked.label.includes('Silent Edit')) {
     await cfg.update('silentEdit.enabled', !config.silentEdit.enabled, vscode.ConfigurationTarget.Workspace);
+  } else if (picked.label.includes('Prompt Cache')) {
+    await cfg.update('promptCache.enabled', !config.promptCache.enabled, vscode.ConfigurationTarget.Workspace);
   } else if (picked.label.includes('Copy proxy URL') && proxyUrl) {
     await vscode.env.clipboard.writeText(proxyUrl);
     vscode.window.showInformationMessage(`Copied: ${proxyUrl}`);

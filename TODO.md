@@ -86,3 +86,15 @@
 - [x] Prompt diff view — `TPT: Show Prompt Diff` opens a side-by-side WebView comparing original client body vs post-pipeline body with module actions and router override listed
 - [x] TPT Inspect command — `TPT: Inspect Last Request` dumps the processed body, module actions, and router override to the Output Channel for the most recent proxied request
 - [x] Export ledger to CSV — `TPT: Export Ledger to CSV` prompts for a save path and writes all ledger rows as CSV
+
+## Phase 10 — Prompt Caching Across Providers (Complete)
+
+- [x] **TPT Prompt Cache** (`src/modules/promptCache.ts`) — injects Anthropic `cache_control: {type: 'ephemeral'}` breakpoints on the last system-prompt block and the second-to-last message, wired into the pipeline as step 5.5, gated on `tpt.promptCache.enabled` (default on) and Anthropic-format requests only
+- [x] Status bar Quick Pick toggle + `TptConfig.promptCache.enabled` setting added
+- [x] Grok conversation-routing header — `x-grok-conv-id` derived from the first message hash, sent on all Grok-bound requests (bypass, streaming, non-streaming paths) so xAI routes repeat turns to the same server and maximizes its automatic cache hit rate
+- [x] Verified no code changes needed for OpenAI, DeepSeek, Qwen, or Kimi — all four cache automatically upstream (confirmed via provider docs, not just assumed)
+- [x] Added GLM (Zhipu/Z.ai, `https://api.z.ai/api/paas/v4`) and MiMo (Xiaomi, `https://api.xiaomimimo.com/v1`) as supported `tpt.upstreamProvider` values — both are OpenAI-compatible with Bearer auth, no special-casing needed in `server.ts`; both cache automatically upstream with no proxy changes needed either
+- [x] Added Mistral (`https://api.mistral.ai/v1`) as a supported `tpt.upstreamProvider` value — OpenAI-compatible with Bearer auth. Unlike GLM/MiMo, Mistral has **no automatic caching**: it requires a stable `prompt_cache_key` on requests sharing a prefix (64-token minimum cache block). Added `runMistralCacheKey` in `promptCache.ts`, wired into `pipeline.ts` as step 5.6, sets the key from the conversation's first message hash — same pattern as the Grok conv-id header
+- [x] Setup wizard (`src/ui/setupWizard.ts`) updated — now offers all nine hosted providers (deepseek, qwen, kimi, grok, glm, mimo, mistral added alongside the original openrouter/anthropic/openai), not just five
+- [ ] Manual verification pending: run a real multi-turn Anthropic conversation through the proxy with `tpt.terminal.verboseLogging` on and confirm `cache_read_input_tokens > 0` in the upstream response `usage` object on turn 2+ (unit tests only prove the markers are placed correctly, not that Anthropic honors them). Same verification needed for Mistral's `prompt_cache_key` — check the response `usage` object for a cache-hit field once a real key is available
+- [ ] Groq and Google Gemini are strong next candidates (see chat) — both OpenAI-compatible, both cache automatically, neither added yet pending user confirmation

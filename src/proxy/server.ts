@@ -4,6 +4,7 @@ import * as https from 'https';
 import * as vscode from 'vscode';
 import { getConfig, resolveUpstreamUrl } from '../utils/config';
 import { log } from '../utils/logger';
+import { hashString } from '../utils/hash';
 import { runPipeline } from './pipeline';
 import { recordRequest } from '../ledger/ledger';
 import { storeCachedResponse } from '../modules/tokenShield';
@@ -37,6 +38,19 @@ function filterResponseHeaders(headers: http.IncomingHttpHeaders): Record<string
   }
   return safe;
 }
+// xAI recommends a stable x-grok-conv-id header so repeated requests in the same
+// conversation route to the same server, maximizing their automatic cache hit rate.
+// Derived from the first non-system message so it stays stable across turns.
+function grokConversationHeaders(upstreamProvider: string, body: Record<string, unknown>): Record<string, string> {
+  if (upstreamProvider !== 'grok') return {};
+  const messages = body.messages;
+  if (!Array.isArray(messages) || messages.length === 0) return {};
+  const first = messages.find((m) => (m as { role?: string })?.role !== 'system') ?? messages[0];
+  const content = (first as { content?: unknown })?.content;
+  if (content === undefined) return {};
+  return { 'x-grok-conv-id': `tpt-${hashString(JSON.stringify(content)).slice(0, 32)}` };
+}
+
 let server: http.Server | undefined;
 let activePort: number | undefined;
 let sessionToken: string | undefined;
@@ -108,7 +122,8 @@ function forwardRequest(
   originalHeaders: http.IncomingHttpHeaders,
   body: string,
   format: 'anthropic' | 'openai',
-  upstreamProvider: string
+  upstreamProvider: string,
+  extraHeaders: Record<string, string> = {}
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
     const url = new URL(targetUrl);
@@ -134,6 +149,8 @@ function forwardRequest(
         outHeaders[h] = originalHeaders[h] as string;
       }
     }
+
+    Object.assign(outHeaders, extraHeaders);
 
     const options: https.RequestOptions = {
       hostname: url.hostname,
@@ -174,6 +191,7 @@ function forwardStreamingRequest(
   _format: 'anthropic' | 'openai',
   upstreamProvider: string,
   clientRes: http.ServerResponse,
+  extraHeaders: Record<string, string> = {}
 ): Promise<{ accumulated: string; status: number }> {
   return new Promise((resolve) => {
     const url = new URL(targetUrl);
@@ -199,6 +217,8 @@ function forwardStreamingRequest(
         outHeaders[h] = originalHeaders[h] as string;
       }
     }
+
+    Object.assign(outHeaders, extraHeaders);
 
     const options: https.RequestOptions = {
       hostname: url.hostname,
@@ -333,15 +353,18 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
 
       // Detect streaming to avoid buffering SSE responses
       let isStreamingBypass = false;
+      let bypassBody: Record<string, unknown> = {};
       try {
-        isStreamingBypass = (JSON.parse(rawBody) as Record<string, unknown>).stream === true;
+        bypassBody = JSON.parse(rawBody) as Record<string, unknown>;
+        isStreamingBypass = bypassBody.stream === true;
       } catch { /* non-JSON body */ }
+      const bypassExtraHeaders = grokConversationHeaders(config.upstreamProvider, bypassBody);
 
       if (isStreamingBypass) {
         await forwardStreamingRequest(
           upstream.baseUrl, upstream.apiKey,
           req.url ?? '/', req.method ?? 'POST',
-          req.headers, rawBody, format, config.upstreamProvider, res
+          req.headers, rawBody, format, config.upstreamProvider, res, bypassExtraHeaders
         );
         return;
       }
@@ -350,7 +373,7 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
         const forwarded = await forwardRequest(
           upstream.baseUrl, upstream.apiKey,
           req.url ?? '/', req.method ?? 'POST',
-          req.headers, rawBody, format, config.upstreamProvider
+          req.headers, rawBody, format, config.upstreamProvider, bypassExtraHeaders
         );
         captureRateLimitHeaders(forwarded.headers as Record<string, string>);
         res.writeHead(forwarded.status, filterResponseHeaders(forwarded.headers));
@@ -417,11 +440,12 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
       const upstream = pipelineResult.overrideUpstream ?? resolveUpstreamUrl(config);
       const outBody = JSON.stringify(pipelineResult.body);
       const tokensIn = countTokens(pipelineResult.body as AnthropicRequest | OpenAIRequest);
+      const extraHeaders = grokConversationHeaders(config.upstreamProvider, pipelineResult.body as Record<string, unknown>);
       try {
         const { accumulated, status } = await forwardStreamingRequest(
           upstream.baseUrl, upstream.apiKey,
           req.url ?? '/', req.method ?? 'POST',
-          req.headers, outBody, format, config.upstreamProvider, res
+          req.headers, outBody, format, config.upstreamProvider, res, extraHeaders
         );
         if (status === 200) {
           const tokensOut = estimateStreamingTokensOut(accumulated, format);
@@ -449,13 +473,14 @@ export async function startProxyServer(context: vscode.ExtensionContext): Promis
     const upstream = pipelineResult.overrideUpstream ?? resolveUpstreamUrl(config);
     const outBody = JSON.stringify(pipelineResult.body);
     const tokensIn = countTokens(pipelineResult.body as AnthropicRequest | OpenAIRequest);
+    const nonStreamExtraHeaders = grokConversationHeaders(config.upstreamProvider, pipelineResult.body as Record<string, unknown>);
 
     let forwarded;
     try {
       forwarded = await forwardRequest(
         upstream.baseUrl, upstream.apiKey,
         req.url ?? '/', req.method ?? 'POST',
-        req.headers, outBody, format, config.upstreamProvider
+        req.headers, outBody, format, config.upstreamProvider, nonStreamExtraHeaders
       );
     } catch (e) {
       log(`Upstream error: ${e}`);

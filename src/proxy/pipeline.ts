@@ -7,6 +7,7 @@ import { runTokenShield } from '../modules/tokenShield';
 import { runMemoryWeaver } from '../modules/memoryWeaver';
 import { runRouter } from '../modules/router';
 import { runSilentEditInjection } from '../modules/silentEdit';
+import { runMistralCacheKey, runPromptCache } from '../modules/promptCache';
 import { storeInspectSnapshot } from '../utils/inspectStore';
 
 export interface PipelineResult {
@@ -71,6 +72,24 @@ export async function runPipeline(req: ProxyRequest): Promise<PipelineResult> {
   if (config.silentEdit.enabled) {
     body = runSilentEditInjection(body, req.format) as AnthropicRequest | OpenAIRequest;
     actions.push('silentEdit:injected');
+  }
+
+  // 5.5. Prompt Cache: mark stable content for Anthropic's native caching discount
+  if (config.promptCache.enabled && req.format === 'anthropic') {
+    const result = runPromptCache(body as AnthropicRequest);
+    body = result.body;
+    if (result.breakpoints > 0) {
+      actions.push(`promptCache:breakpoints=${result.breakpoints}`);
+    }
+  }
+
+  // 5.6. Mistral has no automatic caching — set a stable prompt_cache_key instead
+  if (config.upstreamProvider === 'mistral' && req.format === 'openai') {
+    const result = runMistralCacheKey(body as OpenAIRequest);
+    body = result.body;
+    if (result.applied) {
+      actions.push('promptCache:mistralKey');
+    }
   }
 
   // 6. Router: rewrite model/provider based on heuristics

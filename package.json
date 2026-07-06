@@ -49,6 +49,9 @@
             "qwen",
             "kimi",
             "grok",
+            "glm",
+            "mimo",
+            "mistral",
             "local",
             "custom"
           ],
@@ -60,6 +63,9 @@
             "Qwen — Alibaba Cloud DashScope compatible endpoint",
             "Kimi — Moonshot AI endpoint (api.moonshot.cn)",
             "Grok — xAI Grok API endpoint (api.x.ai)",
+            "GLM — Zhipu AI / Z.ai endpoint (api.z.ai)",
+            "MiMo — Xiaomi MiMo API endpoint (api.xiaomimimo.com)",
+            "Mistral — Mistral AI endpoint (api.mistral.ai)",
             "Local — Ollama, LM Studio, or any local OpenAI-compatible server",
             "Custom — arbitrary base URL and API key"
           ],
@@ -100,6 +106,21 @@
           "type": "string",
           "default": "",
           "description": "Grok API key — xAI (console.x.ai)."
+        },
+        "tpt.glmApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "GLM API key — Zhipu AI / Z.ai (z.ai)."
+        },
+        "tpt.mimoApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "MiMo API key — Xiaomi (platform.xiaomimimo.com)."
+        },
+        "tpt.mistralApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Mistral API key (console.mistral.ai)."
         },
         "tpt.localBaseUrl": {
           "type": "string",
@@ -231,6 +252,11 @@
           "type": "boolean",
           "default": false,
           "description": "TPT Silent Edit — intercept AI JSON edit instructions and apply as native VS Code diffs."
+        },
+        "tpt.promptCache.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "TPT Prompt Cache — mark the system prompt and stable conversation history with Anthropic cache_control breakpoints to claim the native prompt-caching discount. Only applies to Anthropic-format requests; OpenAI, DeepSeek, Qwen, and Kimi cache automatically upstream with no proxy changes needed."
         },
         "tpt.forge.autoUpdate": {
           "type": "boolean",
@@ -378,7 +404,7 @@
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
     "pretest": "npm run compile",
-    "test": "node --test out/test/vault.test.js out/test/hash.test.js out/test/router.test.js out/test/integration/proxy.integration.test.js",
+    "test": "node --test out/test/vault.test.js out/test/hash.test.js out/test/router.test.js out/test/promptCache.test.js out/test/integration/proxy.integration.test.js",
     "download-wasm": "node scripts/download-wasm.js"
   },
   "devDependencies": {

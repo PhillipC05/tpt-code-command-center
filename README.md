@@ -16,6 +16,7 @@ A VS Code extension that acts as a local HTTP proxy between your AI coding tools
 | **TPT Memory Weaver** | Automatically summarises conversation history when it grows too large — keeps context costs in check |
 | **TPT Router** | Rewrites the target model and provider based on configurable heuristics — send simple tasks to cheap local models |
 | **TPT Silent Edit** | Intercepts AI JSON edit instructions and applies them as native undoable VS Code diffs |
+| **TPT Prompt Cache** | Marks the system prompt and stable conversation history with Anthropic `cache_control` breakpoints to unlock its native prompt-caching discount |
 | **TPT Forge** | Install community-maintained router rules, vault patterns, and system prompts from a GitHub registry |
 | **TPT Terminal** | Live pipeline logs in the VS Code Output Channel |
 
@@ -49,6 +50,13 @@ Open VS Code Settings (`Ctrl+,`) and search for `tpt`:
 | `openrouter` (default) | [OpenRouter](https://openrouter.ai) — access all models with one key |
 | `anthropic` | Anthropic API directly |
 | `openai` | OpenAI API directly |
+| `deepseek` | DeepSeek API directly |
+| `qwen` | Alibaba Cloud DashScope (Qwen) |
+| `kimi` | Moonshot AI (Kimi) |
+| `grok` | xAI (Grok) |
+| `glm` | Zhipu AI / Z.ai (GLM) |
+| `mimo` | Xiaomi MiMo |
+| `mistral` | Mistral AI directly |
 | `local` | Ollama, LM Studio, or any local OpenAI-compatible server |
 | `custom` | Any base URL you specify |
 
@@ -140,6 +148,26 @@ Rules are evaluated in order. The first match wins.
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `tpt.silentEdit.enabled` | `false` | Enable JSON-based silent edits |
+
+### TPT Prompt Cache
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `tpt.promptCache.enabled` | `true` | Add Anthropic `cache_control` breakpoints to the system prompt and stable conversation history |
+
+Anthropic and Mistral are the two providers in TPT's list that require an explicit opt-in to get their caching discount — the rest cache automatically upstream with no proxy involvement:
+
+| Provider | Caching |
+|----------|---------|
+| Anthropic | Manual — requires `cache_control`. **TPT Prompt Cache adds this on every Anthropic-format request.** |
+| Mistral | Manual — requires a stable `prompt_cache_key` on requests sharing a prefix (min 64 tokens per cache block). **TPT sets this automatically on every Mistral-bound request**, derived from the conversation's first message so it stays stable across turns. |
+| OpenAI | Automatic for prompts ≥1024 tokens, no code needed |
+| DeepSeek | Automatic disk-based caching, no code needed |
+| Qwen (DashScope) | Automatic implicit caching on the OpenAI-compatible endpoint TPT uses; explicit `cache_control` is also supported if routed through Qwen's Anthropic-compatible endpoint |
+| Kimi (Moonshot) | Automatic prefix caching on `kimi-k2.*` models, no code needed |
+| Grok (xAI) | Automatic, and TPT sends a stable `x-grok-conv-id` header (derived from the conversation's first message) on every Grok-bound request so repeat turns route to the same server and hit cache more often |
+| GLM (Zhipu/Z.ai) | Automatic — cached input billed at 1/5th normal price, no code needed |
+| MiMo (Xiaomi) | Automatic prefix caching via the OpenAI-compatible endpoint, no code needed |
 
 ### TPT Forge
 

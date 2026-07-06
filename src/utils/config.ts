@@ -8,6 +8,9 @@ export type UpstreamProvider =
   | 'qwen'
   | 'kimi'
   | 'grok'
+  | 'glm'
+  | 'mimo'
+  | 'mistral'
   | 'local'
   | 'custom';
 
@@ -21,6 +24,9 @@ export interface TptConfig {
   qwenApiKey: string;
   kimiApiKey: string;
   grokApiKey: string;
+  glmApiKey: string;
+  mimoApiKey: string;
+  mistralApiKey: string;
   localBaseUrl: string;
   customBaseUrl: string;
   customApiKey: string;
@@ -46,6 +52,7 @@ export interface TptConfig {
   };
   router: { enabled: boolean; rules: RouterRule[] };
   silentEdit: { enabled: boolean };
+  promptCache: { enabled: boolean };
   forge: { autoUpdate: boolean; registryUrl: string };
   terminal: { verboseLogging: boolean };
   costBudget: { dailyLimitUsd: number; monthlyLimitUsd: number; hardStop: boolean; quotaPollingIntervalSec: number };
@@ -69,6 +76,9 @@ export function getConfig(): TptConfig {
     qwenApiKey: c.get<string>('qwenApiKey', ''),
     kimiApiKey: c.get<string>('kimiApiKey', ''),
     grokApiKey: c.get<string>('grokApiKey', ''),
+    glmApiKey: c.get<string>('glmApiKey', ''),
+    mimoApiKey: c.get<string>('mimoApiKey', ''),
+    mistralApiKey: c.get<string>('mistralApiKey', ''),
     localBaseUrl: c.get<string>('localBaseUrl', 'http://localhost:11434/v1'),
     customBaseUrl: c.get<string>('customBaseUrl', ''),
     customApiKey: c.get<string>('customApiKey', ''),
@@ -104,6 +114,9 @@ export function getConfig(): TptConfig {
     },
     silentEdit: {
       enabled: c.get<boolean>('silentEdit.enabled', false),
+    },
+    promptCache: {
+      enabled: c.get<boolean>('promptCache.enabled', true),
     },
     forge: {
       autoUpdate: c.get<boolean>('forge.autoUpdate', true),
@@ -162,6 +175,12 @@ export function resolveUpstreamUrl(config: TptConfig): { baseUrl: string; apiKey
       return { baseUrl: 'https://api.moonshot.cn/v1', apiKey: config.kimiApiKey };
     case 'grok':
       return { baseUrl: 'https://api.x.ai/v1', apiKey: config.grokApiKey };
+    case 'glm':
+      return { baseUrl: 'https://api.z.ai/api/paas/v4', apiKey: config.glmApiKey };
+    case 'mimo':
+      return { baseUrl: 'https://api.xiaomimimo.com/v1', apiKey: config.mimoApiKey };
+    case 'mistral':
+      return { baseUrl: 'https://api.mistral.ai/v1', apiKey: config.mistralApiKey };
     case 'local': {
       validateUserSuppliedUrl(config.localBaseUrl || 'http://localhost:11434/v1');
       return { baseUrl: config.localBaseUrl, apiKey: '' };

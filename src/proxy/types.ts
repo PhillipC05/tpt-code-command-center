@@ -31,6 +31,7 @@ export interface AnthropicRequest {
 export interface SystemBlock {
   type: 'text';
   text: string;
+  cache_control?: { type: 'ephemeral'; ttl?: '5m' | '1h' };
 }
 
 // OpenAI Chat Completions shape (simplified)
@@ -40,6 +41,7 @@ export interface OpenAIRequest {
   max_tokens?: number;
   tools?: unknown[];
   stream?: boolean;
+  prompt_cache_key?: string;
   [key: string]: unknown;
 }
 
@@ -51,5 +53,6 @@ export interface Message {
 export interface ContentBlock {
   type: string;
   text?: string;
+  cache_control?: { type: 'ephemeral'; ttl?: '5m' | '1h' };
   [key: string]: unknown;
 }
